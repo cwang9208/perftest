@@ -140,19 +140,19 @@ static void init_perftest_params(struct perftest_parameters *user_param) {
 	user_param->tx_depth   = user_param->tst == BW ? DEF_TX_BW : DEF_TX_LAT;
 	user_param->qp_timeout = DEF_QP_TIME;
 	user_param->all		   = OFF;
-	user_param->cpu_freq_f = OFF;
+	user_param->cpu_freq_f  = OFF;
 	user_param->connection_type = RC;
-	user_param->use_event  = OFF;
-	user_param->num_of_qps = DEF_NUM_QPS;
-	user_param->gid_index  = DEF_GID_INDEX;
+	user_param->use_event   = OFF;
+	user_param->num_of_qps  = DEF_NUM_QPS;
+	user_param->gid_index   = DEF_GID_INDEX;
 	user_param->inline_size = user_param->tst == BW ? DEF_INLINE_BW : DEF_INLINE_LT;
 	user_param->use_mcg     = OFF;
 	user_param->use_rdma_cm = OFF;
-	user_param->work_rdma_cm = OFF;
+	user_param->work_rdma_cm = ON;
 	user_param->rx_depth    = user_param->verb == SEND ? DEF_RX_SEND : DEF_RX_RDMA;
-	user_param->duplex		= OFF;
-	user_param->noPeak		= OFF;
-	user_param->cq_mod		= DEF_CQ_MOD;
+	user_param->duplex	= OFF;
+	user_param->noPeak	= OFF;
+	user_param->cq_mod	= DEF_CQ_MOD;
 
 	user_param->iters = (user_param->tst == BW && user_param->verb == WRITE) ? DEF_ITERS_WB : DEF_ITERS;
 
@@ -469,7 +469,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'V': printf("Version: %.2f\n",user_param->version); return 1;
 			case 'h': usage(argv[0],user_param->verb,user_param->tst); return 1;
 			case 'z': user_param->use_rdma_cm = ON; break;
-			case 'R': user_param->work_rdma_cm = ON; break;
+			case 'R': user_param->work_rdma_cm = OFF; break;
 			case 'q': CHECK_VALUE(user_param->num_of_qps,MIN_QP_NUM,MAX_QP_NUM,"num of Qps"); 
 				if (user_param->verb != WRITE || user_param->tst != BW) {
 					fprintf(stderr," Multiple QPs only availible on ib_write_bw and ib_write_bw_postlist\n");
