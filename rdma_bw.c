@@ -52,6 +52,7 @@
 #include <arpa/inet.h>
 #include <byteswap.h>
 #include <time.h>
+#include <signal.h>
 
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
@@ -62,8 +63,29 @@
 
 static int sl = 0;
 static int tos = -1;
+static int duration = -1;
+static int margin = 2;
 static int page_size;
 static pid_t pid;
+volatile cycles_t		start_traffic = 0;
+volatile cycles_t		end_traffic = 0;
+volatile cycles_t		start_sample = 0;
+volatile cycles_t		end_sample = 0;
+int             scnt, ccnt, global_cnt;
+
+enum state{
+	START_STATE,
+	SAMPLE_STATE,
+	STOP_SAMPLE_STATE,
+	END_STATE
+};
+volatile enum state			state = START_STATE;;
+
+enum type{
+	ITERATIONS,
+	DURATION
+};
+enum type			testing_type = ITERATIONS;;
 
 struct pingpong_context {
 	struct ibv_context *context;
@@ -892,7 +914,9 @@ static void usage(const char *argv0)
 	printf("  -t, --tx-depth=<dep>   size of tx queue (default 100)\n");
 	printf("  -n, --iters=<iters>    number of exchanges (at least 2, default 1000)\n");
 	printf("  -S, --sl=<sl>          SL (default 0)\n");
-    printf("  -T, --tos=<tos>        Type Of Service (default 0)\n");
+	printf("  -T, --tos=<tos>        Type Of Service (default 0)\n");
+	printf("  -D, --duration=<dur>   Duration Based run (do not run with --iters)\n");
+	printf("  -m, --margin=<mar>     Margin of sampling time (when duration based run)\n");
 	printf("  -b, --bidirectional    measure bidirectional bandwidth (default unidirectional)\n");
 	printf("  -c, --cma		 		 use RDMA CM\n");
 }
@@ -909,38 +933,68 @@ static void print_report(unsigned int iters, unsigned size, int duplex,
 
 
 	opt_delta = tcompleted[opt_posted] - tposted[opt_completed];
-
-	/* Find the peak bandwidth */
-	for (i = 0; i < iters; ++i)
-		for (j = i; j < iters; ++j) {
-			t = (tcompleted[j] - tposted[i]) / (j - i + 1);
-			if (t < opt_delta) {
-				opt_delta  = t;
-				opt_posted = i;
-				opt_completed = j;
-			}
-		}
-
 	cycles_to_units = get_cpu_mhz(0) * 1000000;
-
 	tsize = duplex ? 2 : 1;
 	tsize = tsize * size;
 
-	printf("\n%d: Bandwidth peak (#%d to #%d): %g MB/sec\n", pid, 
-			 opt_posted, opt_completed,
-			 tsize * cycles_to_units / opt_delta / 0x100000);
-	printf("%d: Bandwidth average: %g MB/sec\n", pid, 
-			 tsize * iters * cycles_to_units /
-			 (tcompleted[iters - 1] - tposted[0]) / 0x100000);
+	if (testing_type == ITERATIONS) {
+		/* Find the peak bandwidth */
+		for (i = 0; i < iters; ++i)
+			for (j = i; j < iters; ++j) {
+				t = (tcompleted[j] - tposted[i]) / (j - i + 1);
+				if (t < opt_delta) {
+					opt_delta  = t;
+					opt_posted = i;
+					opt_completed = j;
+				}
+			}
 
-	printf("%d: Service Demand peak (#%d to #%d): %ld cycles/KB\n", pid, 
-			 opt_posted, opt_completed,
-			 (unsigned long)opt_delta * 1024 / tsize);
-	printf("%d: Service Demand Avg  : %ld cycles/KB\n", pid, 
-			 (unsigned long)(tcompleted[iters - 1] - tposted[0]) *
-			 1024 / (tsize * iters));	
+		printf("\n%d: Bandwidth peak (#%d to #%d): %g MB/sec\n", pid,
+				 opt_posted, opt_completed,
+				 tsize * cycles_to_units / opt_delta / 0x100000);
+		printf("%d: Bandwidth average: %g MB/sec\n", pid,
+				 tsize * iters * cycles_to_units /
+				 (tcompleted[iters - 1] - tposted[0]) / 0x100000);
+
+		printf("%d: Service Demand peak (#%d to #%d): %ld cycles/KB\n", pid,
+				 opt_posted, opt_completed,
+				 (unsigned long)opt_delta * 1024 / tsize);
+		printf("%d: Service Demand Avg  : %ld cycles/KB\n", pid,
+				 (unsigned long)(tcompleted[iters - 1] - tposted[0]) *
+		1024 / (tsize * iters));
+	}else
+	if (testing_type == DURATION) {
+		printf("%d: START_TRAFFIC: %lf\n", pid, start_traffic / cycles_to_units);
+		printf("%d: START_SAMPLE: %lf\n", pid, start_sample / cycles_to_units);
+		printf("%d: END_SAMPLE: %lf\n", pid, end_sample / cycles_to_units);
+		printf("%d: END_TRAFFIC: %lf\n", pid, end_traffic / cycles_to_units);
+		printf("%d: COMPLETIONS TAKEN: %d\n", pid, global_cnt);
+		printf("%d: Bandwidth average: %g MB/sec (%g GB/sec)\n", pid,
+				tsize * global_cnt * cycles_to_units / (end_sample - start_sample) / 0x100000,
+				tsize * global_cnt * cycles_to_units / (end_sample - start_sample) / 0x100000 / 119.2);
+	}
 }
 
+void catch_alarm(int sig) {
+
+	switch (state) {
+		case START_STATE:
+			state = SAMPLE_STATE;
+			start_sample = get_cycles();
+			alarm(duration - 2*margin);
+			break;
+		case SAMPLE_STATE:
+			state = STOP_SAMPLE_STATE;
+			end_sample = get_cycles();
+			alarm(margin);
+			break;
+		case STOP_SAMPLE_STATE:
+			state = END_STATE;
+			break;
+		default:
+			printf("unknown state\n");
+	}
+}
 
 int main(int argc, char *argv[])
 {
@@ -948,7 +1002,6 @@ int main(int argc, char *argv[])
 	struct pingpong_context *ctx = NULL;
 	char                    *ib_devname = NULL;
 	int                      iters = 1000;
-	int                      scnt, ccnt;
 	int                      duplex = 0;
 	struct ibv_qp		*qp;
 	cycles_t		*tposted;
@@ -979,13 +1032,15 @@ int main(int argc, char *argv[])
 			{ .name = "iters",          .has_arg = 1, .val = 'n' },
 			{ .name = "tx-depth",       .has_arg = 1, .val = 't' },
 			{ .name = "sl",             .has_arg = 1, .val = 'S' },
-            { .name = "tos",            .has_arg = 1, .val = 'T' },
+			{ .name = "tos",            .has_arg = 1, .val = 'T' },
+			{ .name = "duration",       .has_arg = 1, .val = 'D' },
+			{ .name = "margin",         .has_arg = 1, .val = 'm' },
 			{ .name = "bidirectional",  .has_arg = 0, .val = 'b' },
 			{ .name = "cma", 	    .has_arg = 0, .val = 'c' },
 			{ 0 }
 		};
 
-		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:bc", long_options, NULL);
+		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:D:m:bc", long_options, NULL);
 		if (c == -1)
 			break;
 
@@ -1025,15 +1080,31 @@ int main(int argc, char *argv[])
 
 		case 'n':
 			iters = strtol(optarg, NULL, 0);
-			if (iters < 2) {
+			if (iters < 2 || duration > 0) {
 				usage(argv[0]);
 				return 1;
 			}
-
 			break;
 
-        case 'T':
+		case 'T':
 			tos = strtol(optarg, NULL, 0);
+			break;
+
+		case 'D':
+			duration = strtol(optarg, NULL, 0);
+			if (duration <= 0) {
+				usage(argv[0]);
+				return 1;
+			}
+			testing_type = DURATION;
+			break;
+
+		case 'm':
+			margin = strtol(optarg, NULL, 0);
+			if (margin <= 0) {
+				usage(argv[0]);
+				return 1;
+			}
 			break;
 
 		case 'S':
@@ -1067,9 +1138,20 @@ int main(int argc, char *argv[])
 	 */
 	pid = getpid();
 
-	printf("%d: | port=%d | ib_port=%d | size=%d | tx_depth=%d | sl=%d | iters=%d | duplex=%d | cma=%d |\n",
-		 pid, data.port, data.ib_port, data.size, data.tx_depth,
-		 sl, iters, duplex, data.use_cma);
+	if (testing_type == ITERATIONS) {
+		printf("%d: | port=%d | ib_port=%d | size=%d | tx_depth=%d | sl=%d | iters=%d | duplex=%d | cma=%d |\n",
+				pid, data.port, data.ib_port, data.size, data.tx_depth,
+				sl, iters, duplex, data.use_cma);
+	}else
+	if (testing_type == DURATION) {
+		if (duration <= 2 * margin) {
+			usage(argv[0]);
+			return 1;
+		}
+		printf("%d: | port=%d | ib_port=%d | size=%d | tx_depth=%d | sl=%d | duration=%d | margin=%d | duplex=%d | cma=%d |\n",
+				pid, data.port, data.ib_port, data.size, data.tx_depth,
+				sl, duration, margin, duplex, data.use_cma);
+	}
 		
 	/* Done with parameter parsing. Perform setup. */
 
@@ -1190,7 +1272,7 @@ int main(int argc, char *argv[])
 	if (!data.servername && !duplex) {
 		if (data.use_cma) {
 			pp_wait_for_done(ctx);
-                        pp_send_done(ctx);
+				pp_send_done(ctx);
 			pp_close_cma(data);
 		} else {
 			pp_server_exch_dest(&data);
@@ -1214,30 +1296,35 @@ int main(int argc, char *argv[])
 
 	scnt = 0;
 	ccnt = 0;
+	global_cnt = 0;
+
+	if (testing_type == DURATION) {
+		signal(SIGALRM, catch_alarm);
+		alarm(margin);
+	}
 
 	qp = ctx->qp;
 
 	tposted = malloc(iters * sizeof *tposted);
-
 	if (!tposted) {
 		perror("malloc");
 		return 1;
 	}
 
 	tcompleted = malloc(iters * sizeof *tcompleted);
-
 	if (!tcompleted) {
 		perror("malloc");
 		return 1;
 	}
 
 	/* Done with setup. Start the test. */
+	start_traffic = get_cycles();
+	while (scnt < iters || ccnt < iters || (testing_type == DURATION && state != END_STATE)) {
 
-	while (scnt < iters || ccnt < iters) {
-
-		while (scnt < iters && scnt - ccnt < data.tx_depth) {
+		while ((scnt < iters || testing_type == DURATION) && scnt - ccnt < data.tx_depth) {
 			struct ibv_send_wr *bad_wr;
-			tposted[scnt] = get_cycles();
+			if (testing_type == ITERATIONS)
+				tposted[scnt] = get_cycles();
 
 			if (ibv_post_send(qp, &ctx->wr, &bad_wr)) {
 				fprintf(stderr, "%d:%s: Couldn't post send: scnt=%d\n",
@@ -1247,14 +1334,15 @@ int main(int argc, char *argv[])
 			++scnt;
 		}
 
-		if (ccnt < iters) {
+		if (ccnt < iters || (testing_type == DURATION && ccnt < scnt)) {
 			struct ibv_wc wc;
 			int ne;
 			do {
 				ne = ibv_poll_cq(ctx->scq, 1, &wc);
 			} while (ne == 0);
 
-			tcompleted[ccnt] = get_cycles();
+			if (testing_type == ITERATIONS)
+				tcompleted[ccnt] = get_cycles();
 
 			if (ne < 0) {
 				fprintf(stderr, "%d:%s: poll CQ failed %d\n", pid, 
@@ -1271,13 +1359,16 @@ int main(int argc, char *argv[])
 				return 1;
 			}
 			ccnt += 1;
+			if (state == SAMPLE_STATE)
+				++global_cnt;
 		}
 	}
 
+	end_traffic = get_cycles();
 	if (data.use_cma) {
 		/* This is racy when duplex mode is used*/
 		pp_send_done(ctx);
-               	pp_wait_for_done(ctx);
+		pp_wait_for_done(ctx);
 		pp_close_cma(data);
 	} else {
 		if (data.servername) 
@@ -1289,10 +1380,11 @@ int main(int argc, char *argv[])
 		close(data.sockfd);
 		
 	}
-	
+
 	print_report(iters, data.size, duplex, tposted, tcompleted);
 
 	free(tposted);
 	free(tcompleted);
+
 	return 0;
 }

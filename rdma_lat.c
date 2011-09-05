@@ -52,6 +52,7 @@
 #include <arpa/inet.h>
 #include <byteswap.h>
 #include <time.h>
+#include <signal.h>
 
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
@@ -66,6 +67,26 @@ static int sl = 0;
 static int tos = -1;
 static int page_size;
 static pid_t pid;
+static int duration = -1;
+static int margin = 2;
+volatile cycles_t		start_traffic = 0;
+volatile cycles_t		end_traffic = 0;
+volatile cycles_t		start_sample = 0;
+volatile cycles_t		end_sample = 0;
+
+enum state{
+	START_STATE,
+	SAMPLE_STATE,
+	STOP_SAMPLE_STATE,
+	END_STATE
+};
+volatile enum state			state = START_STATE;
+
+enum type{
+	ITERATIONS,
+	DURATION
+};
+enum type			testing_type = ITERATIONS;
 
 struct report_options {
 	int unsorted;
@@ -949,6 +970,8 @@ static void usage(const char *argv0)
 	printf("  -n, --iters=<iters>    number of exchanges (at least 2, default 1000)\n");
 	printf("  -S, --sl=<sl>          SL (default 0)\n");
 	printf("  -T, --tos=<tos>        Type Of Service (default 0)\n");
+	printf("  -D, --duration=<dur>   Duration Based run (do not run with --iters)\n");
+	printf("  -m, --margin=<mar>     Margin of sampling time (when duration based run)\n");
 	printf("  -I, --inline_size=<size>  max size of message to be sent in inline mode (default 400)\n");
 	printf("  -C, --report-cycles    report times in cpu cycle units (default microseconds)\n");
 	printf("  -H, --report-histogram print out all results (default print summary only)\n");
@@ -981,11 +1004,11 @@ static int cycles_compare(const void * aptr, const void * bptr)
 }
 
 static void print_report(struct report_options * options,
-			 unsigned int iters, cycles_t *tstamp)
+			 unsigned int iters, cycles_t *tstamp, unsigned int start_index)
 {
 	double cycles_to_units;
 	cycles_t median;
-	unsigned int i;
+	unsigned int i, a;
 	const char* units;
 	cycles_t *delta = malloc((iters - 1) * sizeof *delta);
 
@@ -994,8 +1017,10 @@ static void print_report(struct report_options * options,
 		return;
 	}
 
-	for (i = 0; i < iters - 1; ++i)
-		delta[i] = tstamp[i + 1] - tstamp[i];
+	for (a = 0, i = start_index; a < iters - 1; ++a, i = (i + 1) % iters) {
+		//printf("a=%d, i=%d, \n", a, i);
+		delta[a] = tstamp[(i + 1) % iters] - tstamp[i];
+	}
 
 
 	if (options->cycles) {
@@ -1022,11 +1047,48 @@ static void print_report(struct report_options * options,
 
 	median = get_median(iters - 1, delta);
 
+	if (testing_type == DURATION) {
+		printf("\n%d: START_TRAFFIC: %lf\n", pid, start_traffic / cycles_to_units);
+		printf("%d: START_SAMPLE: %lf\n", pid, start_sample / cycles_to_units);
+		printf("%d: END_SAMPLE: %lf\n", pid, end_sample / cycles_to_units);
+		printf("%d: END_TRAFFIC: %lf\n", pid, end_traffic / cycles_to_units);
+	}
+
 	printf("Latency typical: %g %s\n", median / cycles_to_units / 2, units);
 	printf("Latency best   : %g %s\n", delta[0] / cycles_to_units / 2, units);
 	printf("Latency worst  : %g %s\n", delta[iters - 2] / cycles_to_units / 2, units);
 
 	free(delta);
+}
+
+char* print_state(int val) {
+	switch (val) {
+		case START_STATE: return "START_STATE";
+		case SAMPLE_STATE: return "SAMPLE_STATE";
+		case STOP_SAMPLE_STATE: return "STOP_SAMPLE_STATE";
+		case END_STATE: return "END_STATE";
+		default: return "unknown";
+	}
+}
+
+void catch_alarm(int sig) {
+	switch (state) {
+		case START_STATE:
+			state = SAMPLE_STATE;
+			start_sample = get_cycles();
+			alarm(duration - 2*margin);
+			break;
+		case SAMPLE_STATE:
+			state = STOP_SAMPLE_STATE;
+			end_sample = get_cycles();
+			alarm(margin);
+			break;
+		case STOP_SAMPLE_STATE:
+			state = END_STATE;
+			break;
+		default:
+			printf("unknown state\n");
+	}
 }
 
 int main(int argc, char *argv[])
@@ -1073,6 +1135,8 @@ int main(int argc, char *argv[])
 			{ .name = "tx-depth",       .has_arg = 1, .val = 't' },
 			{ .name = "sl",             .has_arg = 1, .val = 'S' },
 			{ .name = "tos",            .has_arg = 1, .val = 'T' },
+			{ .name = "duration",       .has_arg = 1, .val = 'D' },
+			{ .name = "margin",         .has_arg = 1, .val = 'm' },
 			{ .name = "inline_size",     .has_arg = 1, .val = 'I' },
 			{ .name = "report-cycles",  .has_arg = 0, .val = 'C' },
 			{ .name = "report-histogram",.has_arg = 0, .val = 'H' },
@@ -1081,7 +1145,7 @@ int main(int argc, char *argv[])
 			{ 0 }
 		};
 
-		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:I:CHUc", long_options, NULL);
+		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:D:m:I:CHUc", long_options, NULL);
 		if (c == -1)
 			break;
 
@@ -1128,6 +1192,23 @@ int main(int argc, char *argv[])
 				tos = strtol(optarg, NULL, 0);
 				break;
 
+			case 'D':
+				duration = strtol(optarg, NULL, 0);
+				if (duration <= 0) {
+					usage(argv[0]);
+					return 1;
+				}
+				testing_type = DURATION;
+				break;
+
+			case 'm':
+				margin = strtol(optarg, NULL, 0);
+				if (margin <= 0) {
+					usage(argv[0]);
+					return 1;
+				}
+				break;
+
 			case 'S':
 				sl = strtol(optarg, NULL, 0);
 				if (sl > 15) { usage(argv[0]); return 6; }
@@ -1164,6 +1245,10 @@ int main(int argc, char *argv[])
 	else if (optind < argc) {
 		usage(argv[0]);
 		return 6;
+	}
+	if (testing_type == DURATION && duration <= 2 * margin) {
+		usage(argv[0]);
+		return 1;
 	}
 
 	/*
@@ -1262,23 +1347,32 @@ int main(int argc, char *argv[])
 		return 10;
 	}
 
+	if (testing_type == DURATION) {
+		signal(SIGALRM, catch_alarm);
+		alarm(margin);
+	}
+	start_traffic = get_cycles();
 	/* Done with setup. Start the test. */
 
-	while (scnt < iters || ccnt < iters || rcnt < iters) {
+	while (scnt < iters || ccnt < iters || rcnt < iters || (testing_type == DURATION && state != END_STATE)) {
 
 		/* Wait till buffer changes. */
-		if (rcnt < iters && !(scnt < 1 && data.servername)) {
+		if ((rcnt < iters || (testing_type == DURATION && state != END_STATE)) && !(scnt < 1 && data.servername)) {
 			++rcnt;
-			while (*poll_buf != (char)rcnt)
-				;
+			while (*poll_buf != (char)rcnt && state != END_STATE);
 			/* Here the data is already in the physical memory.
 			   If we wanted to actually use it, we may need
 			   a read memory barrier here. */
 		}
 
-		if (scnt < iters) {
+		if (scnt < iters || (testing_type == DURATION && state != END_STATE)) {
 			struct ibv_send_wr *bad_wr;
-			tstamp[scnt] = get_cycles();
+			if (testing_type == ITERATIONS) {
+				tstamp[scnt] = get_cycles();
+			}else
+			if (testing_type == DURATION) {
+				tstamp[scnt % iters] = get_cycles();
+			}
 
 			*post_buf = (char)++scnt;
 			if (ibv_post_send(qp, wr, &bad_wr)) {
@@ -1288,7 +1382,7 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		if (ccnt < iters) {
+		if (ccnt < iters || (testing_type == DURATION && state != END_STATE)) {
 			struct ibv_wc wc;
 			int ne;
 			++ccnt;
@@ -1300,6 +1394,7 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "poll CQ failed %d\n", ne);
 				return 12;
 			}
+
 			if (wc.status != IBV_WC_SUCCESS) {
 				fprintf(stderr, "Completion wth error at %s:\n",
 					servername ? "client" : "server");
@@ -1311,12 +1406,14 @@ int main(int argc, char *argv[])
 			}
 		}
 	}
-	if (data.use_cma) {
+	end_traffic = get_cycles();
+
+	if (data.use_cma && testing_type == ITERATIONS) {
                 pp_send_done(ctx);
                 pp_wait_for_done(ctx);
                 pp_close_cma(data);
 	}
 
-	print_report(&report, iters, tstamp);
+	print_report(&report, iters, tstamp, (scnt + 1) % iters);
 	return 0;
 }
