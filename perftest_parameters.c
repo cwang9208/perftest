@@ -150,9 +150,10 @@ static void init_perftest_params(struct perftest_parameters *user_param) {
 	user_param->use_rdma_cm = OFF;
 	user_param->work_rdma_cm = ON;
 	user_param->rx_depth    = user_param->verb == SEND ? DEF_RX_SEND : DEF_RX_RDMA;
-	user_param->duplex	= OFF;
-	user_param->noPeak	= OFF;
-	user_param->cq_mod	= DEF_CQ_MOD;
+	user_param->duplex		= OFF;
+	user_param->noPeak		= OFF;
+	user_param->cq_mod		= DEF_CQ_MOD;
+	user_param->tos 		= DEF_TOS;
 
 	user_param->iters = (user_param->tst == BW && user_param->verb == WRITE) ? DEF_ITERS_WB : DEF_ITERS;
 
@@ -260,6 +261,10 @@ static void force_dependecies(struct perftest_parameters *user_param) {
 			printf(RESULT_LINE);
 			fprintf(stdout," Perftest only supports 1 rmda_cm QP for now\n");
 		}
+
+	} else if (user_param->tos != DEF_TOS) {
+		fprintf(stdout," TOS only valid for rdma_cm based QP - Change has no effect\n");
+		user_param->tos = DEF_TOS;
 	}
 
 	if (user_param->connection_type == UD && user_param->machine == SERVER) {
@@ -434,6 +439,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			{ .name = "rdma_cm",   		.has_arg = 0, .val = 'R' },
 			{ .name = "help",           .has_arg = 0, .val = 'h' },
 			{ .name = "MGID",           .has_arg = 1, .val = 'M' },
+			{ .name = "tos",			.has_arg = 1, .val = 'T' },
 			{ .name = "rx-depth",       .has_arg = 1, .val = 'r' },
 			{ .name = "bidirectional",  .has_arg = 0, .val = 'b' },
 			{ .name = "cq-mod",  		.has_arg = 1, .val = 'Q' },
@@ -445,7 +451,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
             { 0 }
         };
 
-        c = getopt_long(argc,argv,"p:d:i:m:o:c:s:g:n:t:I:r:u:q:S:x:M:Q:lVaezRhbNFCHU",long_options,NULL);
+        c = getopt_long(argc,argv,"p:d:i:m:o:c:s:g:n:t:I:r:u:q:S:x:M:T:Q:lVaezRhbNFCHU",long_options,NULL);
 
         if (c == -1)
 			break;
@@ -466,10 +472,11 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'a': user_param->all 		 = ON;											  break;
 			case 'F': user_param->cpu_freq_f = ON; 											  break;
 			case 'c': change_conn_type(&user_param->connection_type,user_param->verb,optarg); break;
-			case 'V': printf("Version: %.2f\n",user_param->version); return 1;
-			case 'h': usage(argv[0],user_param->verb,user_param->tst); return 1;
-			case 'z': user_param->use_rdma_cm = ON; break;
-			case 'R': user_param->work_rdma_cm = OFF; break;
+			case 'z': user_param->use_rdma_cm = ON; 										  break;
+			case 'R': user_param->work_rdma_cm = OFF; 										  break;
+			case 'V': printf("Version: %.2f\n",user_param->version); 						  return 1;
+			case 'h': usage(argv[0],user_param->verb,user_param->tst); 						  return 1;
+			case 'T': CHECK_VALUE(user_param->tos,MIN_TOS,MAX_TOS,"TOS");					  break;
 			case 'q': CHECK_VALUE(user_param->num_of_qps,MIN_QP_NUM,MAX_QP_NUM,"num of Qps"); 
 				if (user_param->verb != WRITE || user_param->tst != BW) {
 					fprintf(stderr," Multiple QPs only availible on ib_write_bw and ib_write_bw_postlist\n");
@@ -682,10 +689,17 @@ void ctx_print_test_info(struct perftest_parameters *user_param) {
 
 	printf(" Data ex. method : %s\n",exchange_state[temp]);
 
-	if (user_param->work_rdma_cm && user_param->machine == SERVER) {
-		printf(RESULT_LINE);
-		printf(" Waiting for client rdma_cm QP to connect\n");
-		printf(" Please run the same command with the IB/RoCE interface IP\n");
+	if (user_param->work_rdma_cm) {
+
+		if (user_param->tos != DEF_TOS) {
+			printf(" TOS             : %d\n",user_param->tos);
+		}
+
+		if (user_param->machine == SERVER) {
+			printf(RESULT_LINE);
+			printf(" Waiting for client rdma_cm QP to connect\n");
+			printf(" Please run the same command with the IB/RoCE interface IP\n");
+		}
 	}
 
 	printf(RESULT_LINE);

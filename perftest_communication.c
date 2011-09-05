@@ -436,6 +436,14 @@ int rdma_client_connect(struct pingpong_context *ctx,
 	rdma_ack_cm_event(event);
 	break;
    }
+
+    if (user_param->tos != DEF_TOS) {
+
+		if (rdma_set_option(ctx->cm_id,RDMA_OPTION_ID,RDMA_OPTION_ID_TOS,&user_param->tos,sizeof(uint8_t))) {
+			fprintf(stderr, " Set TOS option failed: %d\n",event->event);
+			return FAILURE;
+		}
+	}
 		
     while (1) {
 
@@ -559,6 +567,15 @@ int rdma_server_connect(struct pingpong_context *ctx,
 	}
 
 	ctx->cm_id = (struct rdma_cm_id*)event->id;
+
+	if (user_param->tos != DEF_TOS) {
+
+		if (rdma_set_option(ctx->cm_id,RDMA_OPTION_ID,RDMA_OPTION_ID_TOS,&user_param->tos,sizeof(uint8_t))) {
+			fprintf(stderr, " Set TOS option failed: %d\n",event->event);
+			return FAILURE;
+		}
+	}
+
 	ctx->context = ctx->cm_id->verbs;
 	temp = user_param->work_rdma_cm;
 	user_param->work_rdma_cm = ON;
@@ -582,7 +599,7 @@ int rdma_server_connect(struct pingpong_context *ctx,
 	}
 
 	if (rdma_accept(ctx->cm_id, &conn_param)) {
-		fprintf(stderr, "Function rdma_accept failed - %s\n",strerror(errno));
+		fprintf(stderr, "Function rdma_accept failed\n");
 		return 1;
     }
 

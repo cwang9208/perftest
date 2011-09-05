@@ -61,13 +61,13 @@
 // #define XRC 3 (TBD)
 
 // Genral control definitions
-#define OFF	     (0)
-#define ON 	     (1)
-#define SUCCESS	     (0)
-#define FAILURE	     (1)
-#define MTU_FIX	     (7)
-#define MAX_SIZE     (8388608)
-#define LINK_FAILURE (4)
+#define OFF	     			(0)
+#define ON 	     			(1)
+#define SUCCESS	     		(0)
+#define FAILURE	     		(1)
+#define MTU_FIX	     		(7)
+#define MAX_SIZE     		(8388608)
+#define LINK_FAILURE 		(4)
 #define MAX_OUT_READ_HERMON (16)
 #define MAX_OUT_READ        (4)
 #define UD_ADDITION         (40)
@@ -90,6 +90,7 @@
 #define DEF_RX_RDMA   (1)
 #define DEF_RX_SEND   (600)
 #define DEF_CQ_MOD    (50)
+#define DEF_TOS		  (-1)
 
 // Max and Min allowed values for perftest parameters.
 #define MIN_IB_PORT   (1)
@@ -112,6 +113,8 @@
 #define MAX_RX	      (15000)
 #define MIN_CQ_MOD    (1)
 #define MAX_CQ_MOD    (1000)
+#define MIN_TOS 	  (0)
+#define MAX_TOS		  (256)
 
 
 #define RESULT_LINE "------------------------------------------------------------------\n"
@@ -186,6 +189,7 @@ struct perftest_parameters {
 	int				noPeak;
 	int				cq_mod;
 	int 			spec;
+	int		 		tos;
 	uint8_t 		link_type;
     MachineType		machine;
     PrintDataSide	side;
