@@ -37,10 +37,19 @@ int check_add_port(char **service,int port,
 int create_rdma_resources(struct pingpong_context *ctx,
 						  struct perftest_parameters *user_param) { 
 
+	enum rdma_port_space port_space;
+
 	ctx->cm_channel = rdma_create_event_channel();
 	if (ctx->cm_channel == NULL) {
 		fprintf(stderr, " rdma_create_event_channel failed\n");
 		return FAILURE;
+	}
+
+	switch (user_param->connection_type) {
+
+		case RC: port_space = RDMA_PS_TCP; break;
+		case UD: port_space = RDMA_PS_UDP; break;
+		default: port_space = RDMA_PS_TCP;
 	}
 
 	if (user_param->machine == CLIENT) {

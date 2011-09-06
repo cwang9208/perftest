@@ -567,15 +567,6 @@ int rdma_server_connect(struct pingpong_context *ctx,
 	}
 
 	ctx->cm_id = (struct rdma_cm_id*)event->id;
-
-	if (user_param->tos != DEF_TOS) {
-
-		if (rdma_set_option(ctx->cm_id,RDMA_OPTION_ID,RDMA_OPTION_ID_TOS,&user_param->tos,sizeof(uint8_t))) {
-			fprintf(stderr, " Set TOS option failed: %d\n",event->event);
-			return FAILURE;
-		}
-	}
-
 	ctx->context = ctx->cm_id->verbs;
 	temp = user_param->work_rdma_cm;
 	user_param->work_rdma_cm = ON;

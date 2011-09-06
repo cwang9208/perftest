@@ -167,25 +167,17 @@ static void init_perftest_params(struct perftest_parameters *user_param) {
 /******************************************************************************
  *
  ******************************************************************************/
-static void change_conn_type(int *cptr,VerbType verb,const char *optarg) {
+static void change_conn_type(int *cptr,const char *optarg) {
 
 	if (strcmp(connStr[0],optarg)==0) 
 		*cptr = RC;
 
-	else if (strcmp(connStr[1],optarg)==0) { 
+	else if (strcmp(connStr[1],optarg)==0) 
 		*cptr = UC;
-		if (verb == READ) { 
-			  fprintf(stderr," UC connection not possible in READ verb\n"); 
-			  exit(1);
-		}
 
-	} else if (strcmp(connStr[2],optarg)==0)  { 
+	else if (strcmp(connStr[2],optarg)==0)  { 
 		*cptr = UD;
-		if (verb != SEND) { 
-			fprintf(stderr," UD connection only possible in SEND verb\n"); 
-			exit(1);
-		}
-
+		
 	} else { 
 		fprintf(stderr," Invalid Connection type . please choose from {RC,UC,UD}\n"); 
 		exit(1); 
@@ -197,6 +189,26 @@ static void change_conn_type(int *cptr,VerbType verb,const char *optarg) {
  ******************************************************************************/
 static void force_dependecies(struct perftest_parameters *user_param) {
 
+	// Checking connection type enforcements
+	if (user_param->connection_type == UC) {
+
+		if (user_param->verb == READ) { 
+			fprintf(stderr," UC connection not possible in READ verb\n"); 
+			exit(1);
+		}
+
+		if (user_param->work_rdma_cm == ON) { 
+			fprintf(stderr," UC connection not supported (driver) for rdma_cm based QPs\n"); 
+			exit(1);
+		}
+
+	} else if (user_param->connection_type == UD) {
+
+		if (user_param->verb != SEND) { 
+			fprintf(stderr," UD connection only possible in SEND verb\n"); 
+			exit(1);
+		}
+	}
 
 	// Additional configuration and assignments.
 	if (user_param->tx_depth > user_param->iters) {
@@ -471,7 +483,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'Q': CHECK_VALUE(user_param->cq_mod,MIN_CQ_MOD,MAX_CQ_MOD,"CQ moderation");  break;
 			case 'a': user_param->all 		 = ON;											  break;
 			case 'F': user_param->cpu_freq_f = ON; 											  break;
-			case 'c': change_conn_type(&user_param->connection_type,user_param->verb,optarg); break;
+			case 'c': change_conn_type(&user_param->connection_type,optarg); 				  break;
 			case 'z': user_param->use_rdma_cm = ON; 										  break;
 			case 'R': user_param->work_rdma_cm = OFF; 										  break;
 			case 'V': printf("Version: %.2f\n",user_param->version); 						  return 1;
