@@ -1056,7 +1056,7 @@ static void print_report(struct report_options * options,
 
 	printf("Latency typical: %g %s\n", median / cycles_to_units / 2, units);
 	printf("Latency best   : %g %s\n", delta[0] / cycles_to_units / 2, units);
-	printf("Latency worst  : %g %s\n", delta[iters - 2] / cycles_to_units / 2, units);
+	printf("Latency worst  : %g %s\n", delta[iters - 3] / cycles_to_units / 2, units);
 
 	free(delta);
 }
