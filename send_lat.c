@@ -44,6 +44,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <malloc.h>
+#include <signal.h>
 
 #include "get_clock.h"
 #include "perftest_parameters.h"
@@ -53,7 +54,12 @@
 
 #define VERSION 2.3
 
+volatile cycles_t	start_traffic = 0;
+volatile cycles_t	end_traffic = 0;
+volatile cycles_t	start_sample = 0;
+volatile cycles_t	end_sample = 0;
 cycles_t  *tstamp;
+struct perftest_parameters user_param;
 
 /****************************************************************************** 
  *
@@ -428,11 +434,11 @@ static int cycles_compare(const void *aptr, const void *bptr)
 /****************************************************************************** 
  *
  ******************************************************************************/
-static void print_report(struct perftest_parameters *user_param) {
+static void print_report(struct perftest_parameters *user_param, int start_index) {
 
 	double cycles_to_units;
 	cycles_t median;
-	unsigned int i;
+	unsigned int i, a;
 	const char* units;
 	cycles_t *delta = malloc((user_param->iters - 1) * sizeof *delta);
 
@@ -441,8 +447,8 @@ static void print_report(struct perftest_parameters *user_param) {
 		return;
 	}
 
-	for (i = 0; i < user_param->iters - 1; ++i)
-		delta[i] = tstamp[i + 1] - tstamp[i];
+	for (a = 0, i = start_index; a < user_param->iters - 1; ++a, i = (i + 1) % user_param->iters)
+		delta[a] = tstamp[(i + 1) % user_param->iters] - tstamp[i];
 
 
 	if (user_param->r_flag->cycles) {
@@ -469,11 +475,11 @@ static void print_report(struct perftest_parameters *user_param) {
 
 	median = get_median(user_param->iters - 1, delta);
 	printf(REPORT_FMT_LAT,(unsigned long)user_param->size,user_param->iters,delta[0] / cycles_to_units / 2,
-	       delta[user_param->iters - 2] / cycles_to_units / 2,median / cycles_to_units / 2);
+	       delta[user_param->iters - 3] / cycles_to_units / 2,median / cycles_to_units / 2);
 	free(delta);
 }
 
-/****************************************************************************** 
+/******************************************************************************
  *
  ******************************************************************************/
 int run_iter(struct pingpong_context *ctx, 
@@ -511,9 +517,10 @@ int run_iter(struct pingpong_context *ctx,
 	if (user_param->size <= user_param->inline_size) 
 		wr->send_flags = IBV_SEND_INLINE; 
 
-	while (scnt < user_param->iters || rcnt < user_param->iters) {
-		if (rcnt < user_param->iters && !(scnt < 1 && user_param->machine == CLIENT)) {
-		  
+	while (scnt < user_param->iters || rcnt < user_param->iters || (user_param->test_type == DURATION && user_param->state != END_STATE)) {
+		if ((rcnt < user_param->iters || (user_param->test_type == DURATION && user_param->state != END_STATE))
+				&& !(scnt < 1 && user_param->machine == CLIENT)) {
+
 			// Server is polling on recieve first .
 		    if (user_param->use_event) {
 				if (ctx_notify_events(ctx->cq,ctx->channel)) {
@@ -523,7 +530,7 @@ int run_iter(struct pingpong_context *ctx,
 		    }
 
 			do {
-				
+				if (user_param->state == END_STATE) break;
 				ne = ibv_poll_cq(ctx->cq,DEF_WC_SIZE,wc);
 				if (ne > 0) {
 					for (i = 0; i < ne; i++) {
@@ -534,7 +541,7 @@ int run_iter(struct pingpong_context *ctx,
 						rcnt_for_qp[wc[i].wr_id]++;
 						qp_counter++;
 						
-						if (rcnt_for_qp[wc[i].wr_id] + user_param->rx_depth  <= user_param->iters) {
+						if (rcnt_for_qp[wc[i].wr_id] + user_param->rx_depth  <= user_param->iters || user_param->test_type == DURATION) {
 							if (ibv_post_recv(ctx->qp[wc[i].wr_id],&rwr[wc[i].wr_id], &bad_wr_recv)) {
 								fprintf(stderr, "Couldn't post recv: rcnt=%d\n",rcnt);
 								return 15;
@@ -548,9 +555,13 @@ int run_iter(struct pingpong_context *ctx,
 		}
 
 		// client post first. 
-		if (scnt < user_param->iters) {
-
-			tstamp[scnt++] = get_cycles();
+		if (scnt < user_param->iters || (user_param->test_type == DURATION && user_param->state != END_STATE)) {
+			if (user_param->test_type == ITERATIONS) {
+				tstamp[scnt++] = get_cycles();
+			}else
+			if (user_param->test_type == DURATION) {
+				tstamp[scnt++ % user_param->iters] = get_cycles();
+			}
 
 			if (scnt % user_param->cq_mod == 0 || scnt == user_param->iters) {
 				poll = 1;
@@ -562,9 +573,7 @@ int run_iter(struct pingpong_context *ctx,
 				return 11;
 			}
 		}
-
 		if (poll == 1) {
-
 		    struct ibv_wc s_wc;
 		    int s_ne;
 
@@ -595,9 +604,36 @@ int run_iter(struct pingpong_context *ctx,
 	if (user_param->size <= user_param->inline_size) 
 		wr->send_flags &= ~IBV_SEND_INLINE;
 
+	end_traffic = get_cycles();
+	print_report(user_param, user_param->state == END_STATE ? ((scnt + 1) % user_param->iters) : 0);
+
 	free(wc);
 	free(rcnt_for_qp);
 	return 0;
+}
+
+
+/******************************************************************************
+ *
+ ******************************************************************************/
+void catch_alarm(int sig) {
+	switch (user_param.state) {
+		case START_STATE:
+			user_param.state = SAMPLE_STATE;
+			start_sample = get_cycles();
+			alarm(user_param.duration - 2*(user_param.margin));
+			break;
+		case SAMPLE_STATE:
+			user_param.state = STOP_SAMPLE_STATE;
+			end_sample = get_cycles();
+			alarm(user_param.margin);
+			break;
+		case STOP_SAMPLE_STATE:
+			user_param.state = END_STATE;
+			break;
+		default:
+			printf("unknown state\n");
+	}
 }
 
 /****************************************************************************** 
@@ -613,7 +649,6 @@ int main(int argc, char *argv[])
 	struct pingpong_dest	   my_dest,rem_dest;
 	struct mcast_parameters	   mcg_params;
 	struct ibv_device          *ib_dev = NULL;
-	struct perftest_parameters user_param;
 	struct perftest_comm	   user_comm;
 	struct ibv_recv_wr		   *rwr = NULL;
 	struct ibv_send_wr 		   wr;
@@ -753,7 +788,13 @@ int main(int argc, char *argv[])
 	ALLOCATE(rwr,struct ibv_recv_wr,user_param.num_of_qps);
 	ALLOCATE(sge_list,struct ibv_sge,user_param.num_of_qps);
 	set_send_wqe(&ctx,rem_dest.qpn,&user_param,&wr,&list);
-    
+
+	if (user_param.test_type == DURATION) {
+		user_param.state = START_STATE;
+		signal(SIGALRM, catch_alarm);
+		alarm(user_param.margin);
+	}
+	start_traffic = get_cycles();
 	if (user_param.all == ON) {
 
 		if (user_param.connection_type == UD)  
@@ -764,8 +805,6 @@ int main(int argc, char *argv[])
 			if(run_iter(&ctx, &user_param, &rem_dest,rwr,sge_list,&wr,&list))
 				return 17;
 
-			print_report(&user_param);
-
 			if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
 				fprintf(stderr,"Failed to exchange date between server and clients\n");
 				return 1;
@@ -773,8 +812,7 @@ int main(int argc, char *argv[])
 		}
 	} else {
 		if(run_iter(&ctx, &user_param, &rem_dest,rwr,sge_list,&wr,&list))
-			return 18;	
-		print_report(&user_param);
+			return 18;
 	}
 
 	if (ctx_close_connection(&user_comm,&my_dest,&rem_dest)) {

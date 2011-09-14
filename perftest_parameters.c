@@ -68,6 +68,15 @@ static void usage(const char *argv0,VerbType verb,TestType tst)	{
 	printf("  -F, --CPU-freq ");
 	printf(" Do not fail even if cpufreq_ondemand module is loaded\n");
 
+	if (verb == SEND && tst == LAT) { 
+
+		printf("  -D, --duration ");
+		printf(" duration based run - invoke stream for a period\n");
+
+		printf("  -f, --margin ");
+		printf(" measure results within margin\n");
+	}
+
 	printf("  -V, --version ");
 	printf(" Display version number\n");
 
@@ -155,6 +164,10 @@ static void init_perftest_params(struct perftest_parameters *user_param) {
 	user_param->cq_mod		= DEF_CQ_MOD;
 	user_param->tos 		= DEF_TOS;
 
+	user_param->test_type   = ITERATIONS;
+	user_param->duration    = DEF_DURATION;
+	user_param->margin      = DEF_MARGIN;
+
 	user_param->iters = (user_param->tst == BW && user_param->verb == WRITE) ? DEF_ITERS_WB : DEF_ITERS;
 
 	if (user_param->tst == LAT) {
@@ -209,6 +222,18 @@ static void force_dependecies(struct perftest_parameters *user_param) {
 			exit(1);
 		}
 	}
+
+	if (user_param->test_type == DURATION) {
+
+		if (user_param->duration <= 2 * user_param->margin) {
+			printf(RESULT_LINE);
+			fprintf(stderr," Duration must be greater than 2 * margin\n");
+			fprintf(stderr," Setting duration and margin to default values\n");
+			user_param->duration = DEF_DURATION;
+			user_param->margin = DEF_MARGIN;
+		}
+	}
+
 
 	// Additional configuration and assignments.
 	if (user_param->tx_depth > user_param->iters) {
@@ -456,6 +481,8 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			{ .name = "bidirectional",  .has_arg = 0, .val = 'b' },
 			{ .name = "cq-mod",  		.has_arg = 1, .val = 'Q' },
 			{ .name = "noPeak",         .has_arg = 0, .val = 'N' },
+			{ .name = "duration",       .has_arg = 1, .val = 'D' },
+			{ .name = "margin",         .has_arg = 1, .val = 'f' },
             { .name = "version",        .has_arg = 0, .val = 'V' },
             { .name = "report-cycles",  .has_arg = 0, .val = 'C' },
 			{ .name = "report-histogrm",.has_arg = 0, .val = 'H' },
@@ -463,7 +490,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
             { 0 }
         };
 
-        c = getopt_long(argc,argv,"p:d:i:m:o:c:s:g:n:t:I:r:u:q:S:x:M:T:Q:lVaezRhbNFCHU",long_options,NULL);
+        c = getopt_long(argc,argv,"p:d:i:m:o:c:s:g:n:t:I:r:u:q:S:x:M:Q:T:D:f:lVaezRhbNFCHU",long_options,NULL);
 
         if (c == -1)
 			break;
@@ -489,12 +516,32 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'V': printf("Version: %.2f\n",user_param->version); 						  return 1;
 			case 'h': usage(argv[0],user_param->verb,user_param->tst); 						  return 1;
 			case 'T': CHECK_VALUE(user_param->tos,MIN_TOS,MAX_TOS,"TOS");					  break;
+			case 'D': user_param->duration = strtol(optarg, NULL, 0);
+				  if (user_param->duration <= 0) {
+					  fprintf(stderr," Duration must be greater than 0\n");
+                      return 1;
+				  }
+				  user_param->test_type = DURATION;
+				  if (user_param->verb != SEND || user_param->tst != LAT) {
+					  fprintf(stderr," Duration measurement method only implemented in ib_send_lat\n");
+                      return 1;
+				  }
+				  break;
+			case 'f': user_param->margin = strtol(optarg, NULL, 0);
+				  if (user_param->margin <= 0) {
+					  fprintf(stderr," margin must be greater than 0\n");
+                      return 1;
+				  }
+				  if (user_param->verb != SEND || user_param->tst != LAT) {
+					  fprintf(stderr," Duration measurement method only implemented in ib_send_lat\n");
+                      return 1;
+				  }
+				  break;
 			case 'q': CHECK_VALUE(user_param->num_of_qps,MIN_QP_NUM,MAX_QP_NUM,"num of Qps"); 
 				if (user_param->verb != WRITE || user_param->tst != BW) {
 					fprintf(stderr," Multiple QPs only availible on ib_write_bw and ib_write_bw_postlist\n");
                     return 1;
 				} break;
-				
 			case 'e': user_param->use_event = ON;
 				if (user_param->verb == WRITE) {
 					fprintf(stderr," Events feature not availible on WRITE verb\n");

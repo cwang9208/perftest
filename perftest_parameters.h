@@ -91,6 +91,8 @@
 #define DEF_RX_SEND   (600)
 #define DEF_CQ_MOD    (50)
 #define DEF_TOS		  (-1)
+#define DEF_DURATION  (10)
+#define DEF_MARGIN    (2)
 
 // Max and Min allowed values for perftest parameters.
 #define MIN_IB_PORT   (1)
@@ -159,6 +161,9 @@ typedef enum { LOCAL , REMOTE } PrintDataSide;
 // The type of the device (Hermon B0/A0 or no)
 typedef enum { ERROR = -1 , NOT_HERMON = 0 , HERMON = 1 } Device;
 
+// Type of test method.
+typedef enum { ITERATIONS , DURATION } TestMethod;
+
 struct perftest_parameters {
 
 	int				port;
@@ -199,6 +204,10 @@ struct perftest_parameters {
 	int				cq_size;
 	float			version;
 	struct report_options  *r_flag;
+	volatile int	state;
+	int				duration;
+	int				margin;
+	TestMethod		test_type;
 };
 
 struct report_options {

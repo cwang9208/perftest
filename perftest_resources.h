@@ -111,6 +111,13 @@
 
 #define UD_MSG_2_EXP(size) ((log(size))/(log(2)))
 
+enum state{
+	START_STATE,
+	SAMPLE_STATE,
+	STOP_SAMPLE_STATE,
+	END_STATE
+};
+
 /******************************************************************************
  * Perftest resources Structures and data types.
  ******************************************************************************/
