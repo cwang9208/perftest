@@ -20,6 +20,24 @@
 
 static const char *sideArray[]  = {"local", "remote"};
 static const char *gidArray[]   = {"GID"  , "MGID"};
+static const char *eventArray[] = {
+	"RDMA_CM_EVENT_ADDR_RESOLVED",
+	"RDMA_CM_EVENT_ADDR_ERROR",
+	"RDMA_CM_EVENT_ROUTE_RESOLVED",
+	"RDMA_CM_EVENT_ROUTE_ERROR",
+	"RDMA_CM_EVENT_CONNECT_REQUEST",
+	"RDMA_CM_EVENT_CONNECT_RESPONSE",
+	"RDMA_CM_EVENT_CONNECT_ERROR",
+	"RDMA_CM_EVENT_UNREACHABLE",
+	"RDMA_CM_EVENT_REJECTED",
+	"RDMA_CM_EVENT_ESTABLISHED",
+	"RDMA_CM_EVENT_DISCONNECTED",
+	"RDMA_CM_EVENT_DEVICE_REMOVAL",
+	"RDMA_CM_EVENT_MULTICAST_JOIN",
+	"RDMA_CM_EVENT_MULTICAST_ERROR",
+	"RDMA_CM_EVENT_ADDR_CHANGE",
+	"RDMA_CM_EVENT_TIMEWAIT_EXIT"
+};
 
 /****************************************************************************** 
  *
@@ -428,7 +446,7 @@ int rdma_client_connect(struct pingpong_context *ctx,
 	}
 
 	if (event->event != RDMA_CM_EVENT_ADDR_RESOLVED) {
-	    fprintf(stderr, "unexpected CM event %d\n",event->event);
+	    fprintf(stderr, "unexpected CM event %s\n",eventArray[event->event]);
 	    rdma_ack_cm_event(event);
 	    return FAILURE;
 	}  
@@ -469,7 +487,7 @@ int rdma_client_connect(struct pingpong_context *ctx,
 	}	
 
 	if (event->event != RDMA_CM_EVENT_ROUTE_RESOLVED) {
-		 fprintf(stderr, "unexpected CM event %d\n",event->event);
+		 fprintf(stderr, "unexpected CM event %s\n",eventArray[event->event]);
 		rdma_ack_cm_event(event);
 		return FAILURE;
 	}
@@ -503,7 +521,7 @@ int rdma_client_connect(struct pingpong_context *ctx,
 	}
 
 	if (event->event != RDMA_CM_EVENT_ESTABLISHED) {
-		fprintf(stderr, "Unexpected CM event %d\n",event->event);
+		fprintf(stderr, "Unexpected CM event %s\n",eventArray[event->event]);
 		return FAILURE;
 	}	
 	rdma_ack_cm_event(event);
@@ -562,7 +580,7 @@ int rdma_server_connect(struct pingpong_context *ctx,
 	}
 
 	if (event->event != RDMA_CM_EVENT_CONNECT_REQUEST) {
-		fprintf(stderr, "bad event waiting for connect request %d\n",event->event);
+		fprintf(stderr, "bad event waiting for connect request %s\n",eventArray[event->event]);
 		return 1;
 	}
 
@@ -632,6 +650,7 @@ int create_comm_struct(struct perftest_comm *comm,
 	comm->rdma_params->verb		   = user_param->verb;
 	comm->rdma_params->use_mcg	   = user_param->use_mcg;
 	comm->rdma_params->duplex	   = user_param->duplex;
+	comm->rdma_params->tos 		   = DEF_TOS;
 
 	if (user_param->use_rdma_cm) {
 
