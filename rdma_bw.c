@@ -808,15 +808,17 @@ static void pp_send_done(struct pingpong_context *ctx)
 		ne = ibv_poll_cq(ctx->scq, 1, &wc);
 	} while (ne == 0);
 
-	if (wc.status) 
-		fprintf(stderr, "%d:%s: bad wc status %d\n", pid, __func__,
-						wc.status);
-	if (wc.opcode != IBV_WC_SEND)
-		fprintf(stderr, "%d:%s: bad wc opcode %d\n", pid, __func__, 
-						wc.opcode);
-	if (wc.wr_id != 0xcafebabe) 
-		fprintf(stderr, "%d:%s: bad wc wr_id 0x%x\n", pid, __func__,
-						(int)wc.wr_id);
+	if (state != END_STATE) {
+		if (wc.status) 
+			fprintf(stderr, "%d:%s: bad wc status %d\n", pid, __func__,
+							wc.status);
+		if (wc.opcode != IBV_WC_SEND)
+			fprintf(stderr, "%d:%s: bad wc opcode %d\n", pid, __func__, 
+							wc.opcode);
+		if (wc.wr_id != 0xcafebabe) 
+			fprintf(stderr, "%d:%s: bad wc wr_id 0x%x\n", pid, __func__,
+							(int)wc.wr_id);
+	}
 }
 
 static void pp_wait_for_start(struct pingpong_context *ctx)
