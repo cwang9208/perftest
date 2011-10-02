@@ -264,6 +264,7 @@ struct ibv_qp* ctx_qp_create(struct pingpong_context *ctx,
 		case RC : attr.qp_type = IBV_QPT_RC; break;
 		case UC : attr.qp_type = IBV_QPT_UC; break;
 		case UD : attr.qp_type = IBV_QPT_UD; break;
+		case RawEth : attr.qp_type = IBV_QPT_RAW_PACKET; break;
 		default:  fprintf(stderr, "Unknown connection type \n");
 			return NULL;
 	}
@@ -297,18 +298,23 @@ int ctx_modify_qp_to_init(struct ibv_qp *qp,struct perftest_parameters *user_par
 	attr.pkey_index      = 0;
 	attr.port_num        = user_param->ib_port;
 
-	if (user_param->connection_type == UD) {
-		attr.qkey = DEFF_QKEY;
-		flags |= IBV_QP_QKEY;
-
+	
+	if (user_param->connection_type == RawEth) {
+		flags = IBV_QP_STATE | IBV_QP_PORT;
 	} else {
-		switch (user_param->verb) {
-			case READ  : attr.qp_access_flags = IBV_ACCESS_REMOTE_READ;  break;
-			case WRITE : attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE; break;
-			case SEND  : attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
+		if (user_param->connection_type == UD) {
+			attr.qkey = DEFF_QKEY;
+			flags |= IBV_QP_QKEY;
+
+		} else {
+			switch (user_param->verb) {
+				case READ  : attr.qp_access_flags = IBV_ACCESS_REMOTE_READ;  break;
+				case WRITE : attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE; break;
+				case SEND  : attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
 												IBV_ACCESS_LOCAL_WRITE;
-		}
+			}
 		flags |= IBV_QP_ACCESS_FLAGS;
+		}
 	}
 
 	if (ibv_modify_qp(qp,&attr,flags)) {
@@ -387,6 +393,39 @@ inline void increase_loc_addr(struct ibv_sge *sg,int size,int rcnt,
 
 	//if (server_is_ud)
 		//sg->addr += (CACHE_LINE_SIZE - UD_ADDITION);
+}
+
+/****************************************************************************** 
+ *
+ ******************************************************************************/
+void mac_from_gid(uint8_t   *mac, uint8_t *gid ){
+	
+	//manipolation on the gid num to find the mac 
+	memcpy(mac, gid + 8, 3);
+	memcpy(mac + 3, gid + 13, 3);
+	mac[0] ^= 2;
+}
+/****************************************************************************** 
+ *
+ ******************************************************************************/
+void gen_eth_header(struct ETH_header* eth_header,uint8_t* src_mac,uint8_t* dst_mac, uint16_t eth_type) {
+	//prepare ETH packet header
+	memcpy(eth_header->src_mac, src_mac, 6);
+	memcpy(eth_header->dst_mac, dst_mac, 6);
+	eth_header->eth_type = htons(eth_type);
+/*	memset(eth_header->dst_mac,1,6);*/
+}
+/****************************************************************************** 
+ *
+ ******************************************************************************/
+void dump_buffer(unsigned char *bufptr, int len) {
+	int i;
+
+	for (i = 0; i < len; i++) {
+		printf("%02x:", *bufptr);
+		bufptr++;
+	}
+	printf("\n");
 }
 
 

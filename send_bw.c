@@ -54,7 +54,26 @@
 
 cycles_t	*tposted;
 cycles_t	*tcompleted;
+/****************************************************************************** 
+ *
+ ******************************************************************************/
+void create_raw_eth_pkt( struct pingpong_context *ctx ,  struct pingpong_dest	 *my_dest ,
+							 struct pingpong_dest	 *rem_dest) {
+	int offset = 0;
+ 
+	struct ETH_header  *eth_header;
+	
+	eth_header = (void*)ctx->buf;
+	gen_eth_header(eth_header,my_dest->mac,rem_dest->mac,ctx->size-RAWETH_ADDITTION);
 
+	if (ctx->size <= (CYCLE_BUFFER / 2)) {
+		while (offset < CYCLE_BUFFER-INC(ctx->size)) {
+			offset += INC(ctx->size);
+			eth_header = (void*)ctx->buf+offset;
+			gen_eth_header(eth_header,my_dest->mac,rem_dest->mac,ctx->size-RAWETH_ADDITTION);
+		}
+	}
+}
 /****************************************************************************** 
  *
  ******************************************************************************/
@@ -129,6 +148,7 @@ static int send_set_up_connection(struct pingpong_context *ctx,
 		}
 		my_dest->lid = ctx_get_local_lid(ctx->context,user_parm->ib_port);
 		my_dest->qpn = ctx->qp[0]->qp_num;
+		mac_from_gid(my_dest->mac, my_dest->gid.raw );
 	}
 	my_dest->psn  = lrand48() & 0xffffff;
 
@@ -237,9 +257,15 @@ static int pp_connect_ctx(struct pingpong_context *ctx,int my_psn,
 				return 1;
 			}
 
-		} else {
+		} else if (user_parm->connection_type == UC || user_parm->connection_type == UD){
 			if(ibv_modify_qp(ctx->qp[0],&attr,IBV_QP_STATE |IBV_QP_SQ_PSN)) {
-				fprintf(stderr, "Failed to modify UC QP to RTS\n");
+				fprintf(stderr, "Failed to modify UC/UD QP to RTS\n");
+				return 1;
+			}
+		}
+		else {
+			if (ibv_modify_qp(ctx->qp[0],&attr,IBV_QP_STATE )) {
+				fprintf(stderr, "Failed to modify RawEth QP to RTS\n");
 				return 1;
 			}
 		}
@@ -271,10 +297,9 @@ static int set_recv_wqes(struct pingpong_context *ctx,
 		//if (user_param->connection_type == UD) 
 		//	sge_list[i].addr += (CACHE_LINE_SIZE - UD_ADDITION);
 
-		sge_list[i].length = SIZE(user_param->connection_type,
-								  user_param->size,
-								  (user_param->machine == SERVER || user_param->duplex));
-
+		sge_list[i].length = (user_param->connection_type == RawEth) ? SIZE(user_param->connection_type,user_param->size - HW_CRC_ADDITION,1) 
+										 : SIZE(user_param->connection_type,user_param->size,(user_param->machine == SERVER || user_param->duplex));
+ 
 		sge_list[i].lkey   = ctx->mr->lkey;
 		rwr[i].sg_list     = &sge_list[i];
 		rwr[i].wr_id       = i;
@@ -462,7 +487,7 @@ int run_iter_bi(struct pingpong_context *ctx,
 		num_of_qps--; 
 	
 	// Set the length of the scatter in case of ALL option.
-	wr->sg_list->length = user_param->size;
+	wr->sg_list->length = (user_param->connection_type == RawEth) ? user_param->size - HW_CRC_ADDITION : user_param->size;
 	wr->sg_list->addr   = (uintptr_t)ctx->buf;
 	wr->send_flags = IBV_SEND_SIGNALED;
 	
@@ -641,7 +666,7 @@ int run_iter_uni_client(struct pingpong_context *ctx,
 	ALLOCATE(wc,struct ibv_wc,DEF_WC_SIZE);
 
 	// Set the lenght of the scatter in case of ALL option.
-	wr->sg_list->length = user_param->size;
+	wr->sg_list->length = (user_param->connection_type == RawEth) ? user_param->size - HW_CRC_ADDITION : user_param->size;
 	wr->sg_list->addr   = (uintptr_t)ctx->buf;
 	wr->send_flags = IBV_SEND_SIGNALED; 
 
@@ -727,10 +752,12 @@ int main(int argc, char *argv[]) {
     struct ibv_sge              *sge_list = NULL;
 	struct ibv_recv_wr      	*rwr = NULL;
 	int                      	i = 0;
+	int     			size_min_pow=1;
 	int                      	size_max_pow = 24;
 	int							size_of_arr;
     uint64_t                    *my_addr = NULL;
-
+	uint8_t 				raweth_mac[6] = { 0, 2, 201, 1, 1, 1}; //to this mac we send the RawEth trafic the first 0 stands for unicast
+										       // for multicast use { 1, 2, 201, 1, 1, 1}
 	/* init default values to user's parameters */
 	memset(&ctx, 0,sizeof(struct pingpong_context));
 	memset(&user_param, 0 , sizeof(struct perftest_parameters));
@@ -826,6 +853,11 @@ int main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	raweth_mac[5]=(user_param.port % 255);
+	if ( (user_param.connection_type) == RawEth ){
+			memcpy(rem_dest.mac, raweth_mac, 6);
+			create_raw_eth_pkt(&ctx, &my_dest , &rem_dest);
+	}
 	// shaking hands and gather the other side info.
 	if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
 		fprintf(stderr,"Failed to exchange date between server and clients\n");
@@ -881,6 +913,14 @@ int main(int argc, char *argv[]) {
 		ALLOCATE(my_addr ,uint64_t ,user_param.num_of_qps);
 	}
 	
+//	we send packet to mac number <raweth_mac> to prevent RSS use 
+	if(user_param.connection_type == RawEth){
+			if (attach_qp_to_mac(ctx.qp[0],(char *)raweth_mac, &mcg_params)){
+				printf("Failed to attach qp to mac\n");
+				return 1;
+			}
+	}
+
 	if (user_param.machine == SERVER && !user_param.duplex) {
 		user_param.noPeak = ON;
 	}
@@ -894,9 +934,19 @@ int main(int argc, char *argv[]) {
 		if (user_param.connection_type == UD) 
 		   size_max_pow =  (int)UD_MSG_2_EXP(MTU_SIZE(user_param.curr_mtu)) + 1;
 
-		for (i = 1; i < size_max_pow ; ++i) {
+		if (user_param.connection_type == RawEth ) {
+			size_min_pow = (int)UD_MSG_2_EXP(RAWETH_MIN_MSG_SIZE);
+			size_max_pow = (int)UD_MSG_2_EXP(user_param.curr_mtu) +1;
+		}
+
+		for (i = size_min_pow; i < size_max_pow ; ++i) {
 			user_param.size = 1 << i;
 
+			if ( (user_param.connection_type) == RawEth ){
+				ctx.size = user_param.size;
+				memcpy(rem_dest.mac, raweth_mac, 6);
+	 			create_raw_eth_pkt(&ctx, &my_dest , &rem_dest);
+			}
 			if (user_param.machine == SERVER || user_param.duplex) {
 				if (set_recv_wqes(&ctx,&user_param,rwr,sge_list,my_addr)) {
 					fprintf(stderr," Failed to post receive recv_wqes\n");
@@ -906,6 +956,12 @@ int main(int argc, char *argv[]) {
 
 			if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
 				fprintf(stderr,"Failed to exchange date between server and clients\n");
+				return 1;
+			}
+
+			//we send packet to mac number <raweth_mac> to prevent RSS use 
+			if(user_param.connection_type == RawEth && attach_qp_to_mac(ctx.qp[0],(char *)raweth_mac, &mcg_params)){
+				printf("Failed to attach qp to mac\n");
 				return 1;
 			}
 

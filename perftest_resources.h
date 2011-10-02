@@ -109,7 +109,6 @@
 #define INC(size) ((size > CACHE_LINE_SIZE) ? ((size%CACHE_LINE_SIZE == 0) ?  \
 	       (size) : (CACHE_LINE_SIZE*(size/CACHE_LINE_SIZE+1))) : (CACHE_LINE_SIZE))
 
-#define UD_MSG_2_EXP(size) ((log(size))/(log(2)))
 
 enum state{
 	START_STATE,
@@ -122,9 +121,16 @@ enum state{
  * Perftest resources Structures and data types.
  ******************************************************************************/
 
+struct ETH_header {
+	uint8_t dst_mac[6];
+	uint8_t src_mac[6];
+	uint16_t eth_type;
+}__attribute__((packed));
+
+
 struct pingpong_context {
 	struct ibv_context 			*context;
-	struct ibv_comp_channel 	*channel;
+	struct ibv_comp_channel 		*channel;
 	struct ibv_pd      			*pd;
 	struct ibv_mr      			*mr;
 	struct ibv_cq      			*cq;
@@ -138,6 +144,7 @@ struct pingpong_context {
 	struct rdma_event_channel 	*cm_channel;
 	struct rdma_cm_id 		  	*cm_id_control;
 	struct rdma_cm_id 		  	*cm_id;
+	uint64_t				*my_addr;
 };
 
 
@@ -316,4 +323,50 @@ inline void increase_rem_addr(struct ibv_send_wr *wr,int size,int scnt,uint64_t 
 inline void increase_loc_addr(struct ibv_sge *sg,int size,int rcnt,
 							  uint64_t prim_addr,int server_is_ud);
 
+/* mac_from_gid .
+ *
+ * Description :
+ *
+ *  find the mac using gid.
+ *  work on Ethrnet link only.
+ *
+ * Parameters : 
+ *
+ *  gid            - The gid address
+ *  mac  	   - The address of the result 
+ *
+ * Return Value : 0 upon success. -1 if it fails.
+ */
+
+void mac_from_gid(uint8_t   *mac, uint8_t *gid );
+
+/* gen_eth_header .
+ *
+ * Description :
+ *
+ *  generate Eth header.
+ *
+ * Parameters : 
+ *
+ *  source_mac            
+ *  destenation mac  	  
+ *  eth_type- if size < 1500 - size of data . if size > 1500 - eth type. 
+ *
+ * Return Value : 0 upon success. -1 if it fails.
+ */
+void gen_eth_header(struct ETH_header* eth_header,uint8_t* src_mac,uint8_t* dst_mac, uint16_t eth_type);
+
+/* dump_buffer .
+ *
+ * Description :
+ *
+ *  display the contaxt of buffer on the screen.
+ *
+ * Parameters : 
+ *
+ *  bufptr - pointer of the buffer
+ *  len - length of the buffer.
+ *
+ */
+void dump_buffer(unsigned char *bufptr, int len);
 #endif /* PERFTEST_RESOURCES_H */

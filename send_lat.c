@@ -61,6 +61,18 @@ volatile cycles_t	end_sample = 0;
 cycles_t  *tstamp;
 struct perftest_parameters user_param;
 
+void create_raw_eth_pkt( struct pingpong_context *ctx ,  struct pingpong_dest	 *my_dest ,
+							 struct pingpong_dest	 *rem_dest) {
+
+	struct ETH_header  *eth_header;
+	
+	eth_header = (void*)ctx->buf;
+	gen_eth_header(eth_header,my_dest->mac,rem_dest->mac,ctx->size-RAWETH_ADDITTION);
+}
+
+/****************************************************************************** 
+ *
+ ******************************************************************************/
 /****************************************************************************** 
  *
  ******************************************************************************/
@@ -161,6 +173,7 @@ static int send_set_up_connection(struct pingpong_context *ctx,
 		}
 		my_dest->lid   	   = ctx_get_local_lid(ctx->context,user_parm->ib_port);
 		my_dest->qpn   	   = ctx->qp[0]->qp_num;
+		mac_from_gid(my_dest->mac, my_dest->gid.raw );
 	}
 
 	my_dest->psn       = lrand48() & 0xffffff;
@@ -185,7 +198,7 @@ static int send_destroy_ctx_resources(struct pingpong_context    *ctx,
 
 	int i,test_result = 0;
 
-	if (user_parm->use_mcg) {
+	if (user_parm->use_mcg || user_parm->connection_type == RawEth) {
 		if (destroy_mcast_group(ctx,user_parm,mcg_params)) {
 			fprintf(stderr, "failed to destroy MultiCast resources\n");
 			test_result = 1;
@@ -304,7 +317,7 @@ static int pp_connect_ctx(struct pingpong_context *ctx,int my_psn,
 	} else {
 		for (i = 0; i < user_parm->num_of_qps; i++) {
 			if (ibv_modify_qp(ctx->qp[i],&attr,IBV_QP_STATE )) {
-				fprintf(stderr, "Failed to modify UC QP to RTR\n");
+				fprintf(stderr, "Failed to modify UD/RawEth QP to RTR\n");
 				return 1;
 			}
 		}
@@ -330,13 +343,18 @@ static int pp_connect_ctx(struct pingpong_context *ctx,int my_psn,
 			fprintf(stderr, "Failed to modify RC QP to RTS\n");
 			return 1;
 		}
-	} else { 
-		if(ibv_modify_qp(ctx->qp[0],&attr,IBV_QP_STATE |IBV_QP_SQ_PSN)) {
-			fprintf(stderr, "Failed to modify UC QP to RTS\n");
-			return 1;
+	} else if (user_parm->connection_type == UC || user_parm->connection_type == UD) { 
+			if(ibv_modify_qp(ctx->qp[0],&attr,IBV_QP_STATE |IBV_QP_SQ_PSN)) {
+				fprintf(stderr, "Failed to modify UC QP to RTS\n");
+				return 1;
+			}
 		}
-	}
-
+	else {
+			if (ibv_modify_qp(ctx->qp[0],&attr,IBV_QP_STATE )) {
+				fprintf(stderr, "Failed to modify RawEth QP to RTS\n");
+				return 1;
+			}
+		}
 	return 0;
 }
 
@@ -356,7 +374,8 @@ static int set_recv_wqes(struct pingpong_context *ctx,
 	for (i = 0; i < user_param->num_of_qps; i++) {
 
 		sge_list[i].addr   = (uintptr_t)ctx->buf + (i + 1)*buff_size;
-		sge_list[i].length = SIZE(user_param->connection_type,user_param->size,1);
+		sge_list[i].length = (user_param->connection_type == RawEth) ? SIZE(user_param->connection_type,user_param->size - HW_CRC_ADDITION,1) 
+										 : SIZE(user_param->connection_type,user_param->size,1);
 		sge_list[i].lkey   = ctx->mr->lkey;
 
 		rwr[i].sg_list     = &sge_list[i];
@@ -512,7 +531,7 @@ int run_iter(struct pingpong_context *ctx,
 		return 1;
 	}
 	
-	list->length = user_param->size;
+	list->length = (user_param->connection_type == RawEth) ? user_param->size - HW_CRC_ADDITION : user_param->size;
 
 	if (user_param->size <= user_param->inline_size) 
 		wr->send_flags = IBV_SEND_INLINE; 
@@ -643,6 +662,7 @@ int main(int argc, char *argv[])
 {
 
 	int                        i = 0;
+	int                        size_min_pow = 1;
 	int                        size_max_pow = 24;
 	struct report_options      report = {};
 	struct pingpong_context    ctx;
@@ -653,6 +673,8 @@ int main(int argc, char *argv[])
 	struct ibv_recv_wr		   *rwr = NULL;
 	struct ibv_send_wr 		   wr;
 	struct ibv_sge			   list,*sge_list = NULL;
+	uint8_t 				raweth_mac[6] = { 0, 2, 201, 1, 1, 1}; //to this mac we send the RawEth trafic the first 0 stands for unicast
+										       // for multicast use { 1, 2, 201, 1, 1, 1}
 
 	/* init default values to user's parameters */
 	memset(&ctx,		0, sizeof(struct pingpong_context));
@@ -743,6 +765,12 @@ int main(int argc, char *argv[])
 
 	ctx_print_pingpong_data(&my_dest,&user_comm);
 
+	raweth_mac[5]=(user_param.port % 255);
+	if ( (user_param.connection_type) == RawEth ){
+			memcpy(rem_dest.mac, raweth_mac, 6);
+ 	 		create_raw_eth_pkt(&ctx, &my_dest , &rem_dest);
+	}
+
 	// Init the connection and print the local data.
 	if (establish_connection(&user_comm)) {
 		fprintf(stderr," Unable to init the socket connection\n");
@@ -787,6 +815,14 @@ int main(int argc, char *argv[])
 	ALLOCATE(tstamp,cycles_t,user_param.iters);
 	ALLOCATE(rwr,struct ibv_recv_wr,user_param.num_of_qps);
 	ALLOCATE(sge_list,struct ibv_sge,user_param.num_of_qps);
+
+	if(user_param.connection_type == RawEth){
+			if (attach_qp_to_mac(ctx.qp[0],(char *)raweth_mac, &mcg_params)){
+				printf("Failed to attach qp to mac\n");
+				return 1;
+			}
+	}
+
 	set_send_wqe(&ctx,rem_dest.qpn,&user_param,&wr,&list);
 
 	if (user_param.test_type == DURATION) {
@@ -799,8 +835,12 @@ int main(int argc, char *argv[])
 
 		if (user_param.connection_type == UD)  
 			size_max_pow =  (int)UD_MSG_2_EXP(MTU_SIZE(user_param.curr_mtu)) + 1;
-
-		for (i = 1; i < size_max_pow ; ++i) {
+		if (user_param.connection_type == RawEth)  {
+			size_min_pow =  (int)UD_MSG_2_EXP(RAWETH_MIN_MSG_SIZE); 
+			size_max_pow =  (int)UD_MSG_2_EXP(user_param.curr_mtu)+1;  
+		}
+		
+		for (i = size_min_pow; i < size_max_pow ; ++i) {
 			user_param.size = 1 << i;
 			if(run_iter(&ctx, &user_param, &rem_dest,rwr,sge_list,&wr,&list))
 				return 17;

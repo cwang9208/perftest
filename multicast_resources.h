@@ -197,4 +197,18 @@ void set_multicast_gid(struct mcast_parameters *params,uint32_t qp_num,int is_cl
 int join_multicast_group(subn_adm_method method,struct mcast_parameters *params);
 
 
+/* attach_qp_to_mac .
+ *
+ * Description :
+ *
+ *  attach qp to mac number
+ *
+ * Parameters : 
+ *
+ *  qp - pointer of the pq.
+ *  mmac - MAC.
+ *
+ */
+int attach_qp_to_mac(struct ibv_qp *qp,char *mmac , struct mcast_parameters *mcg_params);
+
 #endif /* MULTICAST_RESOURCES_H */

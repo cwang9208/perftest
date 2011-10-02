@@ -6,7 +6,7 @@
 #include "perftest_parameters.h"
 
 
-static const char *connStr[] = {"RC","UC","UD"};
+static const char *connStr[] = {"RC","UC","UD","RawEth"};
 static const char *testsStr[] = {"Send","RDMA_Write","RDMA_Read"};
 static const char *portStates[] = {"Nop","Down","Init","Armed","","Active Defer"};
 static const char *qp_state[] = {"OFF","ON"};
@@ -38,11 +38,11 @@ static void usage(const char *argv0,VerbType verb,TestType tst)	{
 	printf("  -i, --ib-port=<port> ");
 	printf(" Use port <port> of IB device (default %d)\n",DEF_IB_PORT);
 
-	printf("  -c, --connection=<RC/UC/UD> ");
-	printf(" Connection type RC/UC/UD (default RC)\n");
+	printf("  -c, --connection=<RC/UC/UD/RawEth> ");
+	printf(" Connection type RC/UC/UD/RawEth (default RC)\n");
 
 	printf("  -m, --mtu=<mtu> ");
-	printf(" Mtu size : 256 - 4096 (default port mtu)\n");
+	printf(" Mtu size : 256 - 4096 (default port mtu). If connection type is RawEth - get MTU from user\n");
 
 	printf("  -s, --size=<size> ");
 	printf(" Size of message to exchange (default %d)\n",tst == LAT ? DEF_SIZE_LAT : DEF_SIZE_BW);
@@ -188,11 +188,13 @@ static void change_conn_type(int *cptr,const char *optarg) {
 	else if (strcmp(connStr[1],optarg)==0) 
 		*cptr = UC;
 
-	else if (strcmp(connStr[2],optarg)==0)  { 
+	else if (strcmp(connStr[2],optarg)==0)   
 		*cptr = UD;
-		
+
+	else if	(strcmp(connStr[3],optarg)==0) {
+		*cptr = RawEth;
 	} else { 
-		fprintf(stderr," Invalid Connection type . please choose from {RC,UC,UD}\n"); 
+		fprintf(stderr," Invalid Connection type . please choose from {RC,UC,UD,RawEth}\n"); 
 		exit(1); 
 	}
 }
@@ -215,10 +217,10 @@ static void force_dependecies(struct perftest_parameters *user_param) {
 			exit(1);
 		}
 
-	} else if (user_param->connection_type == UD) {
+	} else if (user_param->connection_type == UD || user_param->connection_type == RawEth) {
 
 		if (user_param->verb != SEND) { 
-			fprintf(stderr," UD connection only possible in SEND verb\n"); 
+			fprintf(stderr," UD & RawEth connections only possible in SEND verb\n"); 
 			exit(1);
 		}
 	}
@@ -350,7 +352,24 @@ static Device is_dev_hermon(struct ibv_context *context) {
 	}
 	return is_hermon;
 }
+/****************************************************************************** 
+  *
+  ******************************************************************************/
+static int set_eth_mtu(struct perftest_parameters *user_param) {
 
+	if (user_param->mtu == 0) {
+		user_param->mtu = 1500;
+	}
+	switch (user_param->mtu) {
+				case 1500  :	user_param->curr_mtu = 1500;	 break;
+				case 9600  : 	user_param->curr_mtu = 9600;	 break;
+				default   :	
+					fprintf(stderr," Invalid MTU - %d \n",user_param->mtu);
+					fprintf(stderr," Please choose mtu form {1500, 9600}\n");
+					return -1;
+			}
+	return 0;
+}
 /****************************************************************************** 
  *
  ******************************************************************************/
@@ -650,7 +669,12 @@ int check_link_and_mtu(struct ibv_context *context,struct perftest_parameters *u
 			user_param->gid_index = 0;
 	}
 
-	user_param->curr_mtu = set_mtu(context,user_param->ib_port,user_param->mtu);
+	if (user_param->connection_type == RawEth) {
+		if (set_eth_mtu(user_param) != 0) 
+			fprintf(stderr, " Couldn't set Eth MTU\n");
+	} else {
+		user_param->curr_mtu = set_mtu(context,user_param->ib_port,user_param->mtu);
+	}
 
 	if (is_dev_hermon(context) != HERMON && user_param->inline_size != 0)
 		user_param->inline_size = 0;
@@ -667,6 +691,17 @@ int check_link_and_mtu(struct ibv_context *context,struct perftest_parameters *u
 			fprintf(stderr," Changing to this MTU\n");
 		}
 		user_param->size = MTU_SIZE(user_param->curr_mtu);
+	}
+
+	if (user_param->connection_type == RawEth){	 
+		if (user_param->size > user_param->curr_mtu && user_param->all == OFF) {
+			fprintf(stderr," Max msg size in RawEth is MTU %d\n",user_param->curr_mtu);
+			fprintf(stderr," Changing to this MTU\n");
+			user_param->size = user_param->curr_mtu;
+		} else if (user_param->size < RAWETH_MIN_MSG_SIZE && user_param->all == OFF) {
+			printf(" Min msg size for RawEth is 64B - changing msg size to 64 \n");
+			user_param->size = RAWETH_MIN_MSG_SIZE;
+		}
 	}
 
 	return SUCCESS;
@@ -728,7 +763,11 @@ void ctx_print_test_info(struct perftest_parameters *user_param) {
 		printf(" CQ Moderation   : %d\n",user_param->cq_mod);
 	} 
 
-	printf(" Mtu             : %dB\n",MTU_SIZE(user_param->curr_mtu));
+	if (user_param->connection_type == RawEth)
+		printf(" Mtu             : %dB\n",user_param->curr_mtu);
+	else  
+		printf(" Mtu             : %dB\n",MTU_SIZE(user_param->curr_mtu));
+
 	printf(" Link type       : %s\n" ,link_layer_str(user_param->link_type));
 
 	if (user_param->gid_index != DEF_GID_INDEX)

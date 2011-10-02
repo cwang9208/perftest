@@ -228,7 +228,35 @@ cleanup:
 
 	return test_result;
 }
+/****************************************************************************** 
+ * 
+ ******************************************************************************/
+int attach_qp_to_mac(struct ibv_qp *qp,char *mmac, struct mcast_parameters *mcg_params){
 
+	uint16_t mlid = 0x0000;
+	union ibv_gid mgid;
+	uint8_t mcg_gid[16];
+
+	memset(mcg_gid, 0, 16);
+	//copy the mcast mac to the last 6 bytes of mcast gid .  
+	memcpy(mcg_gid + 10, mmac, 6);
+	memcpy(mgid.raw, mcg_gid, 16);
+
+	//attach mcast address
+	if (ibv_attach_mcast(qp, &mgid, mlid)) {
+		printf("Failed to attach qp to mcast. \n");
+		return 1;
+	}
+	
+	//add paramerers to mcg
+	memcpy(mcg_params->mgid.raw,mcg_gid,16);
+	mcg_params->mlid =  mlid;
+	return 0;
+}
+
+ /****************************************************************************** 
+  * End
+  ******************************************************************************/
 /****************************************************************************** 
  * End
  ******************************************************************************/

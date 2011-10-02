@@ -93,7 +93,10 @@ static int ethernet_write_keys(struct pingpong_dest *my_dest,
 				my_dest->gid.raw[8],my_dest->gid.raw[9],
 				my_dest->gid.raw[10],my_dest->gid.raw[11],
 				my_dest->gid.raw[12],my_dest->gid.raw[13],
-				my_dest->gid.raw[14],my_dest->gid.raw[15]);
+				my_dest->gid.raw[14],my_dest->gid.raw[15],
+				my_dest->mac[0],my_dest->mac[1],
+				my_dest->mac[2],my_dest->mac[3],
+				my_dest->mac[4],my_dest->mac[5]);
 
 		if (write(comm->rdma_params->sockfd, msg, sizeof msg) != sizeof msg) {
 			perror("client write");
@@ -177,16 +180,24 @@ static int ethernet_read_keys(struct pingpong_dest *rem_dest,
 		tmp[term - pstr] = 0;
 		rem_dest->vaddr = strtoull(tmp, NULL, 16); // VA
 
-		for (i = 0; i < 15; ++i) {
+
+		for (i = 0; i < 16; ++i) {
 			pstr += term - pstr + 1;
 			term = strpbrk(pstr, ":");
 			memcpy(tmp, pstr, term - pstr);
 			tmp[term - pstr] = 0;
-			rem_dest->gid.raw[i] = (unsigned char)strtoll(tmp, NULL, 16);
+			rem_dest->gid.raw[i] = (unsigned char)strtoll(tmp, NULL, 16);   //gid
 		}
+		for (i = 0; i < 5; ++i) {
+			pstr += term - pstr + 1;
+			term = strpbrk(pstr, ":");
+			memcpy(tmp, pstr, term - pstr);
+			tmp[term - pstr] = 0;
+			rem_dest->mac[i] = (unsigned char)strtoll(tmp, NULL, 16); //mac
+ 		}
 		pstr += term - pstr + 1;
 		strcpy(tmp, pstr);
-		rem_dest->gid.raw[15] = (unsigned char)strtoll(tmp, NULL, 16);
+		rem_dest->mac[5] = (unsigned char)strtoll(tmp, NULL, 16);
 	}
 	return 0;
 }
@@ -788,12 +799,16 @@ void ctx_print_pingpong_data(struct pingpong_dest *element,
 		printf(PERF_GID_FMT,gidArray[comm->rdma_params->use_mcg && is_there_mgid],
 				element->gid.raw[0], element->gid.raw[1],
 				element->gid.raw[2], element->gid.raw[3], 
-			    element->gid.raw[4], element->gid.raw[5], 
-			    element->gid.raw[6], element->gid.raw[7],
-			   	element->gid.raw[8], element->gid.raw[9],
-			    element->gid.raw[10],element->gid.raw[11],
-			    element->gid.raw[12],element->gid.raw[13],
-				element->gid.raw[14],element->gid.raw[15]);
+				element->gid.raw[4], element->gid.raw[5], 
+				element->gid.raw[6], element->gid.raw[7],
+				element->gid.raw[8], element->gid.raw[9],
+				element->gid.raw[10],element->gid.raw[11],
+				element->gid.raw[12],element->gid.raw[13],
+ 				element->gid.raw[14],element->gid.raw[15]);
++		printf(PERF_MAC_FMT,"MAC",
++				element->mac[0], element->mac[1],
++				element->mac[2], element->mac[3], 
++				element->mac[4], element->mac[5]);
 	}
 }
 

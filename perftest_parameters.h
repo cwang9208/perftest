@@ -58,6 +58,7 @@
 #define RC  (0)
 #define UC  (1) 
 #define UD  (2)
+#define RawEth  (3)
 // #define XRC 3 (TBD)
 
 // Genral control definitions
@@ -71,6 +72,8 @@
 #define MAX_OUT_READ_HERMON (16)
 #define MAX_OUT_READ        (4)
 #define UD_ADDITION         (40)
+#define RAWETH_ADDITTION    (18)
+#define HW_CRC_ADDITION    (4)
 
 // Default Values of perftest parameters
 #define DEF_PORT      (18515)
@@ -117,7 +120,7 @@
 #define MAX_CQ_MOD    (1000)
 #define MIN_TOS 	  (0)
 #define MAX_TOS		  (256)
-
+#define RAWETH_MIN_MSG_SIZE    (64)
 
 #define RESULT_LINE "------------------------------------------------------------------\n"
 
@@ -145,6 +148,8 @@
 	{ ALLOCATE(orig,char,(strlen(temp) + 1)); strcpy(orig,temp); }
 
 #define MTU_SIZE(mtu_ind) ((1 << (MTU_FIX + mtu_ind)))
+
+#define UD_MSG_2_EXP(size) ((log(size))/(log(2)))
 
 // The Verb of the benchmark.
 typedef enum { SEND , WRITE, READ } VerbType;

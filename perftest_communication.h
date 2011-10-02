@@ -44,14 +44,14 @@
 #include "perftest_resources.h"
 
 #define KEY_MSG_SIZE 	 (50)   // Message size without gid.
-#define KEY_MSG_SIZE_GID (98)   // Message size with gid (MGID as well).
+#define KEY_MSG_SIZE_GID (116)   // Message size with gid (MGID as well).
 #define SYNC_SPEC_ID	 (5)
 
 // The Format of the message we pass through sockets , without passing Gid.
 #define KEY_PRINT_FMT "%04x:%04x:%06x:%06x:%08x:%016Lx"
 
 // The Format of the message we pass through sockets (With Gid).
-#define KEY_PRINT_FMT_GID "%04x:%04x:%06x:%06x:%08x:%016Lx:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x"
+#define KEY_PRINT_FMT_GID "%04x:%04x:%06x:%06x:%08x:%016Lx:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x"
 
 // The Basic print format for all verbs.
 #define BASIC_ADDR_FMT " %s address: LID %#04x QPN %#06x PSN %#06x"
@@ -65,6 +65,9 @@
 // The print format of a global address or a multicast address.
 #define PERF_GID_FMT " %s: %02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d:%02d\n"
 
+// The print format of a MAC address.
+#define PERF_MAC_FMT " %s: 0x%02x:%02x:%02x:%02x:%02x:%02x\n"
+
 struct pingpong_dest {
 	int 			   lid;
 	int 			   out_reads;
@@ -73,6 +76,7 @@ struct pingpong_dest {
 	unsigned           rkey;
 	unsigned long long vaddr;
 	union ibv_gid      gid;
+	uint8_t mac[6];
 };
 
 struct perftest_comm {
