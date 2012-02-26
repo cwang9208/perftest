@@ -275,31 +275,31 @@ static int rdma_read_keys(struct pingpong_dest *rem_dest,
  /****************************************************************************** 
  *
  ******************************************************************************/
-static int ethernet_client_connect(struct perftest_comm *comm) {
+static int tcp_client_connect(struct perftest_comm *comm) {
     
 	struct addrinfo *res, *t;
 	struct addrinfo hints = {
 		.ai_family   = AF_UNSPEC,
 		.ai_socktype = SOCK_STREAM
 	};
-	char *service;
+	char *service = NULL;
 	int sockfd = -1;
-
+	
 	if (check_add_port(&service,comm->rdma_params->port,comm->rdma_params->servername,&hints,&res)) {
 		fprintf(stderr, "Problem in resolving basic adress and port\n");
 		return 1;
 	}
-
+	free(service);
 	for (t = res; t; t = t->ai_next) {
 		sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
 		if (sockfd >= 0) {
-			if (!connect(sockfd, t->ai_addr, t->ai_addrlen))
+			if (!connect(sockfd, t->ai_addr, t->ai_addrlen)){
 				break;
+			}
 			close(sockfd);
 			sockfd = -1;
 		}
 	}
-
 	freeaddrinfo(res);
 
 	if (sockfd < 0) {
@@ -316,7 +316,7 @@ static int ethernet_client_connect(struct perftest_comm *comm) {
 /****************************************************************************** 
  *
  ******************************************************************************/
-static int ethernet_server_connect(struct perftest_comm *comm) {
+static int tcp_server_connect(struct perftest_comm *comm) {
 
 	struct addrinfo *res, *t;
 	struct addrinfo hints = {
@@ -324,14 +324,14 @@ static int ethernet_server_connect(struct perftest_comm *comm) {
 		.ai_family   = AF_UNSPEC,
 		.ai_socktype = SOCK_STREAM
 	};
-	char *service;
+	char *service = NULL;
 	int sockfd = -1, connfd,n;
 
 	if (check_add_port(&service,comm->rdma_params->port,NULL,&hints,&res)) {
 		fprintf(stderr, "Problem in resolving basic adress and port\n");
 		return 1;
 	}
-
+	free(service);
 	for (t = res; t; t = t->ai_next) {
 		sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
 		if (sockfd >= 0) {
@@ -362,7 +362,8 @@ static int ethernet_server_connect(struct perftest_comm *comm) {
 		return 1;
 	}
 
-	close(sockfd);
+// 	close(sockfd);
+	comm->sockfd_sd = sockfd;
 	comm->rdma_params->sockfd = connfd;
 	return 0;
 }
@@ -711,7 +712,7 @@ int establish_connection(struct perftest_comm *comm) {
 
 	} else {
 
-		ptr = comm->rdma_params->servername ? &ethernet_client_connect : &ethernet_server_connect;
+		ptr = comm->rdma_params->servername ? &tcp_client_connect : &tcp_server_connect;
 
 		if ((*ptr)(comm)) {
 			fprintf(stderr,"Unable to open file descriptor for socket connection");
@@ -733,7 +734,6 @@ int ctx_hand_shake(struct perftest_comm *comm,
 	int (*write_func_ptr)(struct pingpong_dest*,struct perftest_comm*);
 
 	if (comm->rdma_params->use_rdma_cm || comm->rdma_params->work_rdma_cm) {
-
 		read_func_ptr  = &rdma_read_keys;
 		write_func_ptr = &rdma_write_keys;
 
@@ -826,7 +826,7 @@ int ctx_close_connection(struct perftest_comm *comm,
 
 	if (!comm->rdma_params->use_rdma_cm && !comm->rdma_params->work_rdma_cm) {
 
-		// Close the Socket file descriptor.
+	// Close the Socket file descriptor.
         if (write(comm->rdma_params->sockfd,"done",sizeof "done") != sizeof "done") {
                 perror(" Client write");
                 fprintf(stderr,"Couldn't write to socket\n");
@@ -839,7 +839,50 @@ int ctx_close_connection(struct perftest_comm *comm,
 
 	return 0;
 }
+/****************************************************************************** 
+ *
+ ******************************************************************************/
+int change_data(struct perftest_comm *comm,
+				   cycles_t *data,
+				   cycles_t *other_side_data) {
 
+ 	char msg[8];
+	char other_side_msg[8];
+
+	memcpy(msg, (data),8);
+	if (comm->rdma_params->servername) {  //client
+
+		if (write(comm->rdma_params->sockfd,msg,sizeof msg) != sizeof msg) {
+			perror("client write");
+			fprintf(stderr, "Couldn't send local address\n");
+			return 1;
+		}
+
+		 if (read(comm->rdma_params->sockfd, other_side_msg, sizeof other_side_msg) != sizeof other_side_msg) {
+			perror("pp_read_keys");
+ 			fprintf(stderr, "Couldn't read remote address\n");
+ 			return 1;
+ 		}
+		memcpy(other_side_data, other_side_msg, 8);
+
+	} else {  //server
+		
+		 if (read(comm->rdma_params->sockfd, other_side_msg, sizeof other_side_msg) != sizeof other_side_msg) {
+			perror("pp_read_keys");
+ 			fprintf(stderr, "Couldn't read remote address\n");
+ 			return 1;
+ 		}
+		memcpy(other_side_data, other_side_msg, 8);
+		
+		if (write(comm->rdma_params->sockfd,msg,sizeof msg) != sizeof msg) {
+			perror("client write");
+			fprintf(stderr, "Couldn't send local address\n");
+			return 1;
+		}
+	}
+
+    return 0;
+}
 /****************************************************************************** 
  * End
  ******************************************************************************/

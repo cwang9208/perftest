@@ -82,6 +82,7 @@ struct pingpong_dest {
 struct perftest_comm {
 	struct pingpong_context    *rdma_ctx;
 	struct perftest_parameters *rdma_params;
+	int 				sockfd_sd;
 };
 
 /* create_comm_struct
@@ -208,4 +209,22 @@ int ctx_close_connection(struct perftest_comm *comm,
 				         struct pingpong_dest *my_dest,
 				         struct pingpong_dest *rem_dest);
 
+/* change_data .
+ *
+ * Description :
+ *
+ *  use socket to change data between machines
+ *
+ * Parameters : 
+ *
+ *  comm              - coomunication struct
+ *  data 	      - my data
+ *  other_side_data   - other data
+ *
+ * Return Value : 0 upon success. -1 if it fails.
+ */
+
+int change_data(struct perftest_comm *comm,
+				   cycles_t *data,
+				   cycles_t *other_side_data);
 #endif /* PERFTEST_COMMUNICATION_H */

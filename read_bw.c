@@ -42,6 +42,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <malloc.h>
+#include <signal.h>
 
 #include "get_clock.h"
 #include "perftest_resources.h"
@@ -52,7 +53,12 @@
 
 cycles_t	*tposted;
 cycles_t	*tcompleted;
-
+volatile cycles_t		start_traffic = 0;
+volatile cycles_t		end_traffic = 0;
+volatile cycles_t		start_sample = 0;
+volatile cycles_t		end_sample = 0;
+struct perftest_parameters user_param;
+int             global_cnt = 0;
 /****************************************************************************** 
  *
  ******************************************************************************/
@@ -126,7 +132,7 @@ static void print_report(struct perftest_parameters *user_param) {
 
 	opt_delta = tcompleted[opt_posted] - tposted[opt_completed];
 	
-	if (user_param->noPeak == OFF) {
+	if (user_param->noPeak == OFF && user_param->test_type == ITERATIONS) {
 		/* Find the peak bandwidth */
 		for (i = 0; i < user_param->iters; ++i)
 			for (j = i; j < user_param->iters; ++j) {
@@ -143,8 +149,18 @@ static void print_report(struct perftest_parameters *user_param) {
 	tsize = user_param->duplex ? 2 : 1;
 	tsize = tsize * user_param->size;
 	
-	printf(REPORT_FMT,(unsigned long)user_param->size,user_param->iters,!(user_param->noPeak) * tsize * cycles_to_units / opt_delta / 0x100000,
-	       tsize * user_param->iters * cycles_to_units /(tcompleted[user_param->iters - 1] - tposted[0]) / 0x100000);
+	if (user_param->test_type == ITERATIONS) {
+		printf(REPORT_FMT,(unsigned long)user_param->size,user_param->iters,!(user_param->noPeak) * tsize * cycles_to_units / opt_delta / 0x100000,
+	       		tsize * user_param->iters * cycles_to_units /(tcompleted[user_param->iters - 1] - tposted[0]) / 0x100000, 
+			( 1 + user_param->duplex) * user_param->iters * cycles_to_units /(tcompleted[user_param->iters - 1] - tposted[0])/1000000);
+	}
+	else { 
+		printf(REPORT_FMT, (unsigned long) user_param->size,
+		global_cnt,
+		0.00,
+		tsize * global_cnt * cycles_to_units / (end_sample - start_sample) / 0x100000, 
+		global_cnt * cycles_to_units / (end_sample - start_sample)/1000000);
+	}
 }
 
 /****************************************************************************** 
@@ -155,14 +171,14 @@ int run_iter(struct pingpong_context *ctx,
 			 struct pingpong_dest *rem_dest)
 {
 	
-	int scnt = 0;
-	int ccnt = 0;
-	int i,ne;
-	uint64_t rem_addr, my_addr;
-	struct ibv_sge     	list;
-	struct ibv_send_wr 	wr;
-	struct ibv_wc       *wc     = NULL;
-	struct ibv_send_wr  *bad_wr = NULL;
+	int 				scnt = 0;
+	int 				ccnt = 0;
+	int 				i,ne = 0;
+	uint64_t 			rem_addr, my_addr;
+	struct ibv_sge     		list;
+	struct ibv_send_wr 		wr;
+	struct ibv_wc       		*wc     = NULL;
+	struct ibv_send_wr  		*bad_wr = NULL;
 
 	ALLOCATE(wc , struct ibv_wc , DEF_WC_SIZE);
 
@@ -181,15 +197,17 @@ int run_iter(struct pingpong_context *ctx,
 
 	my_addr  = list.addr;
 	rem_addr = wr.wr.rdma.remote_addr;
-	
-	while (scnt < user_param->iters || ccnt < user_param->iters) {
+	while ((scnt < user_param->iters || ccnt < user_param->iters) || (user_param->test_type == DURATION && user_param->state != END_STATE)) {
+		
+		if (user_param->state == END_STATE) break;
+		while ((scnt < user_param->iters || user_param->test_type == DURATION) && (scnt - ccnt) < user_param->tx_depth ) {
 
-		while (scnt < user_param->iters && (scnt - ccnt) < user_param->tx_depth ) {
-
+			if (user_param->state == END_STATE) break;
 			if (scnt%user_param->cq_mod == 0 && user_param->cq_mod > 1)
 			    wr.send_flags  &= ~IBV_SEND_SIGNALED;
-
-			tposted[scnt] = get_cycles();
+			
+			if (user_param->test_type == ITERATIONS) 
+				tposted[scnt] = get_cycles();
 			if (ibv_post_send(ctx->qp[0], &wr, &bad_wr)) {
 				fprintf(stderr, "Couldn't post send: scnt=%d\n",scnt);
 				return 1;
@@ -201,11 +219,11 @@ int run_iter(struct pingpong_context *ctx,
 			}
 			++scnt;
 
-			if (scnt%user_param->cq_mod == user_param->cq_mod - 1 || scnt == user_param->iters - 1)
+			if (scnt%user_param->cq_mod == user_param->cq_mod - 1 || (user_param->test_type == ITERATIONS && scnt == user_param->iters - 1))
 				wr.send_flags |= IBV_SEND_SIGNALED;
 		}
 
-		if (ccnt < user_param->iters) {
+		if (ccnt < user_param->iters || (user_param->test_type == DURATION && ccnt < scnt)) {
 
 			if (user_param->use_event) {
 				if (ctx_notify_events(ctx->cq,ctx->channel)) {
@@ -215,6 +233,7 @@ int run_iter(struct pingpong_context *ctx,
 			}
 
 			do {
+				if (user_param->state == END_STATE) break;
 				ne = ibv_poll_cq(ctx->cq,DEF_WC_SIZE,wc);
 				if (ne > 0) {
 					for (i = 0; i < ne; i++) {
@@ -223,12 +242,15 @@ int run_iter(struct pingpong_context *ctx,
 							NOTIFY_COMP_ERROR_SEND(wc[i],scnt,ccnt);
 
 						ccnt+=user_param->cq_mod;
+						if (user_param->test_type == ITERATIONS) {
+							if (ccnt >= user_param->iters - 1)
+								tcompleted[user_param->iters - 1] =  get_cycles();
 
-						if (ccnt >= user_param->iters - 1)
-						    tcompleted[user_param->iters - 1] =  get_cycles();
-
-						else 
-						    tcompleted[ccnt - 1] = get_cycles();
+							else 
+						    		tcompleted[ccnt - 1] = get_cycles();
+						} else if (user_param->state == SAMPLE_STATE){
+							global_cnt += user_param->cq_mod;
+							}
 					}
 				}
 			} while (ne > 0);
@@ -249,10 +271,11 @@ int run_iter(struct pingpong_context *ctx,
 int main(int argc, char *argv[]) {
 
 	int                        i = 0;
+	int                         size_min_pow = 1;
+	int                         size_max_pow = 24;
 	struct ibv_device		   *ib_dev = NULL;
 	struct pingpong_context    ctx;
 	struct pingpong_dest       my_dest,rem_dest;
-	struct perftest_parameters user_param;
 	struct perftest_comm	   user_comm;
 	
 	/* init default values to user's parameters */
@@ -267,7 +290,7 @@ int main(int argc, char *argv[]) {
 	user_param.version = VERSION;
 
 	if (parser(&user_param,argv,argc)) 
-		return 1;
+		return 1;	
 
 	ib_dev =ctx_find_dev(user_param.ib_devname);
 	if (!ib_dev)
@@ -289,132 +312,147 @@ int main(int argc, char *argv[]) {
 	// Print basic test information.
 	ctx_print_test_info(&user_param);
 
-	// copy the rellevant user parameters to the comm struct + creating rdma_cm resources.
-	if (create_comm_struct(&user_comm,&user_param)) { 
-		fprintf(stderr," Unable to create RDMA_CM resources\n");
-		return 1;
-	}
+	i=size_min_pow;
+	if (user_param.connection_type == UD)  
+ 		size_max_pow =  (int)UD_MSG_2_EXP(MTU_SIZE(user_param.curr_mtu)) ;
+ 
+	do { 
 
-	// Create (if nessacery) the rdma_cm ids and channel.
-	if (user_param.work_rdma_cm == ON) {
-
-	    if (create_rdma_resources(&ctx,&user_param)) {
-			fprintf(stderr," Unable to create the rdma_resources\n");
-			return FAILURE;
-	    }
+		if (user_param.all == ON) 
+ 			user_param.size = 1 << i;
 		
-  	    if (user_param.machine == CLIENT) {
+		// copy the rellevant user parameters to the comm struct + creating rdma_cm resources.
+		if (create_comm_struct(&user_comm,&user_param)) { 
+			fprintf(stderr," Unable to create RDMA_CM resources\n");
+			return 1;
+		}
 
-			if (rdma_client_connect(&ctx,&user_param)) {
-				fprintf(stderr,"Unable to perform rdma_client function\n");
+		// Create (if nessacery) the rdma_cm ids and channel.
+		if (user_param.work_rdma_cm == ON) {
+
+	    		if (create_rdma_resources(&ctx,&user_param)) {
+				fprintf(stderr," Unable to create the rdma_resources\n");
 				return FAILURE;
-			}
+	    		}
 		
+  	    		if (user_param.machine == CLIENT) {
+
+				if (rdma_client_connect(&ctx,&user_param)) {
+					fprintf(stderr,"Unable to perform rdma_client function\n");
+					return FAILURE;
+				}
+		
+			} else {
+
+				if (rdma_server_connect(&ctx,&user_param)) {
+					fprintf(stderr,"Unable to perform rdma_client function\n");
+					return FAILURE;
+				}
+			}
+
 		} else {
 
-			if (rdma_server_connect(&ctx,&user_param)) {
-				fprintf(stderr,"Unable to perform rdma_client function\n");
+			// create all the basic IB resources.
+			if (ctx_init(&ctx,&user_param)) {
+				fprintf(stderr, " Couldn't create IB resources\n");
 				return FAILURE;
+	    		}
+		}
+
+		// Set up the Connection.
+		if (set_up_connection(&ctx,&user_param,&my_dest)) {
+			fprintf(stderr," Unable to set up socket connection\n");
+			return FAILURE;
+		}
+
+		if (user_param.all == OFF || (user_param.all == ON && i == size_min_pow)) 
+			ctx_print_pingpong_data(&my_dest,&user_comm);
+
+		if (user_param.all == OFF || (user_param.all == ON && i == size_min_pow) || user_param.machine == CLIENT || user_param.work_rdma_cm == ON) {
+			// Init the connection and print the local data.
+			if (establish_connection(&user_comm)) {
+				fprintf(stderr," Unable to init the socket connection\n");
+				return 1;
+			}
+		} else { //if not the first time, server is waiting for client
+			user_comm.rdma_params->sockfd = accept(user_comm.sockfd_sd, NULL, 0);
+			if (user_comm.rdma_params->sockfd < 0) {
+				fprintf(stderr, "accept() failed\n");
+				close(user_comm.sockfd_sd);
+				return 1;
+			}
+		}
+		
+		// shaking hands and gather the other side info.
+		if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
+			fprintf(stderr,"Failed to exchange date between server and clients\n");
+			return 1;
+		}
+		if (user_param.all == OFF || (user_param.all == ON && i == size_min_pow)) {
+			user_comm.rdma_params->side = REMOTE;
+			ctx_print_pingpong_data(&rem_dest,&user_comm);
+			printf(RESULT_LINE);
+			printf(RESULT_FMT);
+		}
+
+		if (user_param.work_rdma_cm == OFF) {
+
+			if (pp_connect_ctx(&ctx,my_dest.psn,my_dest.out_reads,&rem_dest,&user_param)) {
+				fprintf(stderr," Unable to Connect the HCA's through the link\n");
+				return 1;
 			}
 		}
 
-	} else {
-
-		// create all the basic IB resources.
-	    if (ctx_init(&ctx,&user_param)) {
-			fprintf(stderr, " Couldn't create IB resources\n");
-			return FAILURE;
-	    }
-	}
-
-	// Set up the Connection.
-	if (set_up_connection(&ctx,&user_param,&my_dest)) {
-		fprintf(stderr," Unable to set up socket connection\n");
-		return FAILURE;
-	}
-
-	ctx_print_pingpong_data(&my_dest,&user_comm);
-
-	// Init the connection and print the local data.
-	if (establish_connection(&user_comm)) {
-		fprintf(stderr," Unable to init the socket connection\n");
-		return 1;
-	}
-
-	// shaking hands and gather the other side info.
-	if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
-		fprintf(stderr,"Failed to exchange date between server and clients\n");
-		return 1;
-	}
-
-	user_comm.rdma_params->side = REMOTE;
-	ctx_print_pingpong_data(&rem_dest,&user_comm);
-
-	if (user_param.work_rdma_cm == OFF) {
-
-		if (pp_connect_ctx(&ctx,my_dest.psn,my_dest.out_reads,&rem_dest,&user_param)) {
-			fprintf(stderr," Unable to Connect the HCA's through the link\n");
-			return 1;
-		}
-	}
-
-	// An additional handshake is required after moving qp to RTR.
-	if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
-        fprintf(stderr,"Failed to exchange date between server and clients\n");
-        return 1;    
-    }
+		// An additional handshake is required after moving qp to RTR.
+		if (ctx_hand_shake(&user_comm,&my_dest,&rem_dest)) {
+        		fprintf(stderr,"Failed to exchange date between server and clients\n");
+        		return 1;    
+    		}
      
-	// For half duplex tests, server just waits for client to exit 
-	if (user_param.machine == SERVER && !user_param.duplex) {
-
-		if (ctx_close_connection(&user_comm,&my_dest,&rem_dest)) {
-			fprintf(stderr,"Failed to close connection between server and client\n");
-			return 1;
-		}
-
-		printf(RESULT_LINE);
-		return destroy_ctx(&ctx,&user_param);
-
-	} 
-
-	if (user_param.use_event) {
-		if (ibv_req_notify_cq(ctx.cq, 0)) {
-			fprintf(stderr, "Couldn't request CQ notification\n");
-			return 1;
-		} 
-	}
+		// For half duplex tests, server just waits for client to exit 
+		if (user_param.machine == CLIENT || user_param.duplex) {
+			if (user_param.use_event) {
+				if (ibv_req_notify_cq(ctx.cq, 0)) {
+					fprintf(stderr, "Couldn't request CQ notification\n");
+					return 1;
+				} 
+			}
     
-	printf(RESULT_LINE);
-	printf(RESULT_FMT);
+			ALLOCATE(tposted , cycles_t , user_param.iters);
+			ALLOCATE(tcompleted , cycles_t , user_param.iters);
 
-	ALLOCATE(tposted , cycles_t , user_param.iters);
-	ALLOCATE(tcompleted , cycles_t , user_param.iters);
-
-	if (user_param.all == ON) {
-
-		for (i = 1; i < 24 ; ++i) {
-			user_param.size = 1 << i;
+			if (user_param.test_type == DURATION) {
+				user_param.state = START_STATE;
+				signal(SIGALRM, catch_alarm);
+				alarm(user_param.margin);
+				global_cnt = 0;
+			}
 			if(run_iter(&ctx,&user_param,&rem_dest))
 				return 17;
+		
 			print_report(&user_param);
+			free(tposted);
+			free(tcompleted);
 		}
 
-	} 
+		if (ctx_close_connection(&user_comm,&my_dest,&rem_dest)) {
+	 		fprintf(stderr,"Failed to close connection between server and client\n");
+	 		return 1;
+		}
 
-	else {
-
-		if(run_iter(&ctx,&user_param,&rem_dest))
-			return 17;
-		
-		print_report(&user_param);
-	}
-
-	if (ctx_close_connection(&user_comm,&my_dest,&rem_dest)) {
-		fprintf(stderr,"Failed to close connection between server and client\n");
-		return 1;
-	}
-	
+		if (destroy_ctx(&ctx, &user_param, NULL, 0)){
+			fprintf(stderr,"Failed to destroy_ctx\n");
+        		return 1;
+		}
+		if (user_param.use_rdma_cm) {
+			if (destroy_ctx(user_comm.rdma_ctx, user_comm.rdma_params , NULL, ((user_param.all == ON && i == size_max_pow) || user_param.all == OFF))){
+				fprintf(stderr,"Failed to destroy_ctx\n");
+        			return 1;
+			}
+		} 
+		i++;
+	}while ((i >= size_min_pow) && (i <= size_max_pow) && (user_param.all == ON));
 	printf(RESULT_LINE);
 
-	return destroy_ctx(&ctx,&user_param);	
+	return 0;
 }

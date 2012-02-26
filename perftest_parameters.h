@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2009 Mellanox Technologies Ltd.  All rights reserved.
  *
- * This software is available to you under a choice of one of two
+ * This software is available to you under a choice of ge of two
  * licenses.  You may choose to be licensed under the terms of the GNU
  * General Public License (GPL) Version 2, available from the file
  * COPYING in the main directory of this source tree, or the
@@ -122,15 +122,15 @@
 #define MAX_TOS		  (256)
 #define RAWETH_MIN_MSG_SIZE    (64)
 
-#define RESULT_LINE "------------------------------------------------------------------\n"
+#define RESULT_LINE "----------------------------------------------------------------------------------------------\n"
 
 // The format of the results
-#define RESULT_FMT     " #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]\n"
+#define RESULT_FMT     " #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]    MR average[Million/sec]\n"
 
 #define RESULT_FMT_LAT " #bytes #iterations    t_min[usec]    t_max[usec]  t_typical[usec]\n"
 
 // Result print format
-#define REPORT_FMT     " %-7lu    %d           %-7.2f            %-7.2f\n"
+#define REPORT_FMT     " %-7lu    %d           %-7.2f            %-7.2f               %-7.2f\n"
 
 // Result print format for latency tests.
 #define REPORT_FMT_LAT " %-7lu %d          %-7.2f        %-7.2f      %-7.2f\n"
@@ -166,6 +166,9 @@ typedef enum { LOCAL , REMOTE } PrintDataSide;
 // The type of the device (Hermon B0/A0 or no)
 typedef enum { ERROR = -1 , NOT_HERMON = 0 , HERMON = 1 } Device;
 
+// The type boolean
+typedef enum {FALSE, TRUE} bool;
+
 // Type of test method.
 typedef enum { ITERATIONS , DURATION } TestMethod;
 
@@ -192,7 +195,7 @@ struct perftest_parameters {
 	int				out_reads;
 	int				use_mcg;
 	int 			use_rdma_cm;
-    int				work_rdma_cm;
+	int				work_rdma_cm;
 	char			*user_mgid;
 	int				rx_depth;
 	int				duplex;
@@ -206,6 +209,7 @@ struct perftest_parameters {
 	VerbType		verb;
 	TestType		tst;
 	int				sockfd;
+	int				sockfd_sd;
 	int				cq_size;
 	float			version;
 	struct report_options  *r_flag;
@@ -213,6 +217,7 @@ struct perftest_parameters {
 	int				duration;
 	int				margin;
 	TestMethod		test_type;
+	bool 				calc_first_byte_latency;
 };
 
 struct report_options {

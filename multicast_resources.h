@@ -211,4 +211,6 @@ int join_multicast_group(subn_adm_method method,struct mcast_parameters *params)
  */
 int attach_qp_to_mac(struct ibv_qp *qp,char *mmac , struct mcast_parameters *mcg_params);
 
+
+
 #endif /* MULTICAST_RESOURCES_H */

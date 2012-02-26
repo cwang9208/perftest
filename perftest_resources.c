@@ -106,11 +106,24 @@ struct ibv_device* ctx_find_dev(const char *ib_devname) {
  *
  ******************************************************************************/
 int destroy_ctx(struct pingpong_context *ctx,
-				struct perftest_parameters *user_parm)  {
+				struct perftest_parameters *user_parm, struct mcast_parameters    *mcg_params, bool close_device)  {
 
 	int i;
 	int test_result = 0;
 
+// 	if (user_parm->use_mcg || user_parm->connection_type == RawEth) {
+// 		if (destroy_mcast_group(ctx,user_parm,mcg_params)) {
+// 			fprintf(stderr, "failed to destroy MultiCast resources\n");
+// 			test_result = 1;
+// 		}
+// 	}
+
+	if (ctx->ah) {
+		if (ibv_destroy_ah(ctx->ah)) {
+			fprintf(stderr, "failed to destroy AH\n");
+			test_result = 1;
+		}
+	}
 	for (i = 0; i < user_parm->num_of_qps; i++) {
 		if (ibv_destroy_qp(ctx->qp[i])) {
 			fprintf(stderr, "failed to destroy QP\n");
@@ -133,24 +146,41 @@ int destroy_ctx(struct pingpong_context *ctx,
 		test_result = 1;
 	}
 
+
 	if (ctx->channel) {
 		if (ibv_destroy_comp_channel(ctx->channel)) {
 			test_result = 1;
 		}
 	}
 
-	if (user_parm->work_rdma_cm == OFF) {
+	if (user_parm->work_rdma_cm || user_parm->use_rdma_cm) {
+		rdma_destroy_id(ctx->cm_id);
+		rdma_destroy_event_channel(ctx->cm_channel);
+	}
 
+	if (close_device && !(user_parm->work_rdma_cm || user_parm->use_rdma_cm)) {
 		if (ibv_close_device(ctx->context)) {
 			fprintf(stderr, "failed to close device context\n");
 			test_result = 1;
 		}
-
-	} else {
-
-		rdma_destroy_id(ctx->cm_id);
-		rdma_destroy_event_channel(ctx->cm_channel);
 	}
+
+// 	if (user_parm->work_rdma_cm == OFF) {
+// 		
+// 		if (close_device && ibv_close_device(ctx->context)) {
+// 			fprintf(stderr, "failed to close device context\n");
+// 			test_result = 1;
+// 		}
+// 
+// 	} else {
+// 
+// 		rdma_destroy_id(ctx->cm_id);
+// 		rdma_destroy_event_channel(ctx->cm_channel);
+// 		printf("id destroyed\n");
+// 		printf("cm_channel destroyed\n\n");
+// 
+// 
+// 	}
 
 	free(ctx->buf);
 	free(ctx->qp);
@@ -195,18 +225,15 @@ int ctx_init(struct pingpong_context *ctx,struct perftest_parameters *user_param
 			return FAILURE;
 		}
 	}
-
 	// Allocating the Protection domain.
 	ctx->pd = ibv_alloc_pd(ctx->context);
 	if (!ctx->pd) {
 		fprintf(stderr, "Couldn't allocate PD\n");
 		return FAILURE;
 	}
-
 	if (user_param->verb == READ){
 		flags |= IBV_ACCESS_REMOTE_READ;
 	}
-	
 	// Alocating Memory region and assiging our buffer to it.
 	ctx->mr = ibv_reg_mr(ctx->pd,ctx->buf,buff_size,flags);
 	if (!ctx->mr) {
@@ -220,7 +247,6 @@ int ctx_init(struct pingpong_context *ctx,struct perftest_parameters *user_param
 		fprintf(stderr, "Couldn't create CQ\n");
 		return FAILURE;
 	}
-
 	for (i=0; i < user_param->num_of_qps; i++) {
 
 		ctx->qp[i] = ctx_qp_create(ctx,user_param);
@@ -428,6 +454,52 @@ void dump_buffer(unsigned char *bufptr, int len) {
 	printf("\n");
 }
 
+/****************************************************************************** 
+ *
+ ******************************************************************************/
+int destroy_mcast_group(struct pingpong_context *ctx,
+							   struct perftest_parameters *user_parm,
+						       struct mcast_parameters *mcg_params) {
+	int i;
+	for (i = 0; i < user_parm->num_of_qps; i++) {
+		if (ibv_detach_mcast(ctx->qp[i],&mcg_params->mgid,mcg_params->mlid)) {
+			fprintf(stderr, "Couldn't deattach QP from MultiCast group\n");
+			return 1;
+		}
+	}
+	if (!strcmp(link_layer_str(user_parm->link_type),"IB")) {
+		// Removal Request for Mcast group in SM.
+		if (join_multicast_group(SUBN_ADM_METHOD_DELETE,mcg_params)) {
+			fprintf(stderr,"Couldn't Unregister the Mcast group on the SM\n");
+			return 1;
+		}
+	}
+
+	mcg_params->mcast_state &= ~MCAST_IS_ATTACHED;
+	return 0;
+}
+/******************************************************************************
+ *
+ ******************************************************************************/
+void catch_alarm(int sig) {
+	switch (user_param.state) {
+		case START_STATE:
+			user_param.state = SAMPLE_STATE;
+			start_sample = get_cycles();
+			alarm(user_param.duration - 2*(user_param.margin));
+			break;
+		case SAMPLE_STATE:
+			user_param.state = STOP_SAMPLE_STATE;
+			end_sample = get_cycles();
+			alarm(user_param.margin);
+			break;
+		case STOP_SAMPLE_STATE:
+			user_param.state = END_STATE;
+			break;
+		default:
+			printf("unknown state\n");
+	}
+}
 
 /****************************************************************************** 
  * End

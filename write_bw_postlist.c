@@ -55,6 +55,11 @@
 cycles_t	*tposted;
 cycles_t	*tcompleted;
 
+volatile cycles_t	start_traffic = 0;
+volatile cycles_t	end_traffic = 0;
+volatile cycles_t	start_sample = 0;
+volatile cycles_t	end_sample = 0;
+struct perftest_parameters user_param;
 /****************************************************************************** 
  *
  ******************************************************************************/
@@ -171,7 +176,8 @@ static void print_report(struct perftest_parameters *user_param) {
 	tsize = tsize * user_param->size;
 	printf(REPORT_FMT,
 	       (unsigned long)user_param->size,user_param->iters,tsize * cycles_to_units / opt_delta / 0x100000,
-	       tsize * user_param->iters * user_param->num_of_qps * cycles_to_units /(tcompleted[(user_param->iters* user_param->num_of_qps) - 1] - tposted[0]) / 0x100000);
+	       tsize * user_param->iters * user_param->num_of_qps * cycles_to_units /(tcompleted[(user_param->iters* user_param->num_of_qps) - 1] - tposted[0]) / 0x100000, 
+		user_param->iters * user_param->num_of_qps * cycles_to_units /(tcompleted[(user_param->iters* user_param->num_of_qps) - 1] - tposted[0]) / 1000000 );
 }
 
 /****************************************************************************** 
@@ -291,7 +297,7 @@ int main(int argc, char *argv[]) {
 	struct ibv_device	       *ib_dev;
 	struct pingpong_context    ctx;
 	struct pingpong_dest       *my_dest,*rem_dest;
-	struct perftest_parameters user_param;
+/*	struct perftest_parameters user_param;*/
 	struct perftest_comm	   user_comm;
 	int                        i = 0;
 

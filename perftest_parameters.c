@@ -68,14 +68,12 @@ static void usage(const char *argv0,VerbType verb,TestType tst)	{
 	printf("  -F, --CPU-freq ");
 	printf(" Do not fail even if cpufreq_ondemand module is loaded\n");
 
-	if (verb == SEND && tst == LAT) { 
 
-		printf("  -D, --duration ");
-		printf(" duration based run - invoke stream for a period\n");
+	printf("  -D, --duration ");
+	printf(" duration based run - invoke stream for a period\n");
 
-		printf("  -f, --margin ");
-		printf(" measure results within margin\n");
-	}
+	printf("  -f, --margin ");
+	printf(" measure results within margin\n");
 
 	printf("  -V, --version ");
 	printf(" Display version number\n");
@@ -130,10 +128,17 @@ static void usage(const char *argv0,VerbType verb,TestType tst)	{
 
 		printf("  -U, --report-unsorted ");
 		printf(" (implies -H) print out unsorted results (default sorted)\n");
+
 	}
 
 	if (verb == WRITE && tst == BW) 
 		printf("  -q, --qp=<num of qp's>  Num of qp's(default %d)\n",DEF_NUM_QPS);
+
+	if (verb == WRITE && tst == LAT) {
+		printf("  -j, --calc_first_byte_latency ");
+		printf(" calc latecy for the first byte in the message\n");
+	} 
+
 
 	putchar('\n');
 }
@@ -157,7 +162,7 @@ static void init_perftest_params(struct perftest_parameters *user_param) {
 	user_param->inline_size = user_param->tst == BW ? DEF_INLINE_BW : DEF_INLINE_LT;
 	user_param->use_mcg     = OFF;
 	user_param->use_rdma_cm = OFF;
-	user_param->work_rdma_cm = ON;
+	user_param->work_rdma_cm = OFF;
 	user_param->rx_depth    = user_param->verb == SEND ? DEF_RX_SEND : DEF_RX_RDMA;
 	user_param->duplex		= OFF;
 	user_param->noPeak		= OFF;
@@ -169,6 +174,7 @@ static void init_perftest_params(struct perftest_parameters *user_param) {
 	user_param->margin      = DEF_MARGIN;
 
 	user_param->iters = (user_param->tst == BW && user_param->verb == WRITE) ? DEF_ITERS_WB : DEF_ITERS;
+	user_param->calc_first_byte_latency = OFF;
 
 	if (user_param->tst == LAT) {
 		user_param->r_flag->unsorted  = OFF;
@@ -234,12 +240,21 @@ static void force_dependecies(struct perftest_parameters *user_param) {
 			user_param->duration = DEF_DURATION;
 			user_param->margin = DEF_MARGIN;
 		}
+		if (user_param->use_event){
+			fprintf(stderr," Duration can't work with events\n");
+			exit(1);
+		}
 	}
 
+	if (user_param->test_type == DURATION && user_param->noPeak == OFF && user_param->tst == BW ) {
+// /*			user_param->noPeak == ON;*/
+			printf(" Duration is working with NoPick mode only. \n");
+	}
 
 	// Additional configuration and assignments.
 	if (user_param->tx_depth > user_param->iters) {
 		user_param->tx_depth = user_param->iters;
+		printf(" Max Tx depth = number of iteration . Changing Tx depth to %d \n", user_param->iters );
 	}
 
 	if (user_param->cq_mod > user_param->tx_depth) {
@@ -306,10 +321,9 @@ static void force_dependecies(struct perftest_parameters *user_param) {
 		user_param->tos = DEF_TOS;
 	}
 
-	if (user_param->connection_type == UD && user_param->machine == SERVER) {
-		user_param->size += UD_ADDITION;  
+	if (user_param->calc_first_byte_latency == ON && (user_param->verb != WRITE || user_param->tst != LAT)) {
+ 		fprintf(stdout," calc_first_byte_latency only valid for write latency test - Change has no effect\n");
 	}
-
 	return;
 }
 
@@ -475,8 +489,8 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 		static const struct option long_options[] = {
 			{ .name = "port",           .has_arg = 1, .val = 'p' },
 			{ .name = "ib-dev",         .has_arg = 1, .val = 'd' },
-            { .name = "ib-port",        .has_arg = 1, .val = 'i' },
-            { .name = "mtu",            .has_arg = 1, .val = 'm' },
+            		{ .name = "ib-port",        .has_arg = 1, .val = 'i' },
+            		{ .name = "mtu",            .has_arg = 1, .val = 'm' },
 			{ .name = "size",           .has_arg = 1, .val = 's' },
 			{ .name = "iters",          .has_arg = 1, .val = 'n' },
 			{ .name = "tx-depth",       .has_arg = 1, .val = 't' },
@@ -491,7 +505,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			{ .name = "inline_size",    .has_arg = 1, .val = 'I' },
 			{ .name = "outs",           .has_arg = 1, .val = 'o' },
 			{ .name = "mcg",            .has_arg = 1, .val = 'g' },
-            { .name = "comm_rdma_cm",   .has_arg = 0, .val = 'z' },
+            		{ .name = "comm_rdma_cm",   .has_arg = 0, .val = 'z' },
 			{ .name = "rdma_cm",   		.has_arg = 0, .val = 'R' },
 			{ .name = "help",           .has_arg = 0, .val = 'h' },
 			{ .name = "MGID",           .has_arg = 1, .val = 'M' },
@@ -502,14 +516,15 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			{ .name = "noPeak",         .has_arg = 0, .val = 'N' },
 			{ .name = "duration",       .has_arg = 1, .val = 'D' },
 			{ .name = "margin",         .has_arg = 1, .val = 'f' },
-            { .name = "version",        .has_arg = 0, .val = 'V' },
-            { .name = "report-cycles",  .has_arg = 0, .val = 'C' },
+			{ .name = "version",        .has_arg = 0, .val = 'V' },
+			{ .name = "report-cycles",  .has_arg = 0, .val = 'C' },
 			{ .name = "report-histogrm",.has_arg = 0, .val = 'H' },
-            { .name = "report-unsorted",.has_arg = 0, .val = 'U' },
-            { 0 }
+			{ .name = "report-unsorted",.has_arg = 0, .val = 'U' },
+			{ .name = "calc_first_byte_latency",.has_arg = 0, .val = 'j' },
+			{ 0 }
         };
 
-        c = getopt_long(argc,argv,"p:d:i:m:o:c:s:g:n:t:I:r:u:q:S:x:M:Q:T:D:f:lVaezRhbNFCHU",long_options,NULL);
+        c = getopt_long(argc,argv,"p:d:i:m:o:c:s:g:n:t:I:r:u:q:S:x:M:Q:T:D:f:lVaezRhbNFCHUj",long_options,NULL);
 
         if (c == -1)
 			break;
@@ -519,7 +534,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'p': user_param->port = strtol(optarg, NULL, 0);                			  break;
 			case 'd': GET_STRING(user_param->ib_devname,strdupa(optarg)); 			  	  	  break;
 			case 'i': CHECK_VALUE(user_param->ib_port,MIN_IB_PORT,MAX_IB_PORT,"IB Port"); 	  break;
-            case 'm': user_param->mtu  = strtol(optarg, NULL, 0); 							  break;
+            		case 'm': user_param->mtu  = strtol(optarg, NULL, 0); 							  break;
 			case 's': CHECK_VALUE(user_param->size,1,(UINT_MAX / 2),"Message size"); 		  break;
 			case 'n': CHECK_VALUE(user_param->iters,MIN_ITER,MAX_ITER,"Iteration num"); 	  break;
 			case 't': CHECK_VALUE(user_param->tx_depth,MIN_TX,MAX_TX,"Tx depth"); 			  break;
@@ -531,60 +546,53 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'F': user_param->cpu_freq_f = ON; 											  break;
 			case 'c': change_conn_type(&user_param->connection_type,optarg); 				  break;
 			case 'z': user_param->use_rdma_cm = ON; 										  break;
-			case 'R': user_param->work_rdma_cm = OFF; 										  break;
+			case 'R': user_param->work_rdma_cm = ON; 										  break;
 			case 'V': printf("Version: %.2f\n",user_param->version); 						  return 1;
 			case 'h': usage(argv[0],user_param->verb,user_param->tst); 						  return 1;
-			case 'T': CHECK_VALUE(user_param->tos,MIN_TOS,MAX_TOS,"TOS");					  break;
+			case 'T': CHECK_VALUE(user_param->tos,MIN_TOS,MAX_TOS,"TOS");						  break;
+			case 'j': user_param->calc_first_byte_latency = ON;							  break;
 			case 'D': user_param->duration = strtol(optarg, NULL, 0);
 				  if (user_param->duration <= 0) {
-					  fprintf(stderr," Duration must be greater than 0\n");
-                      return 1;
+					fprintf(stderr," Duration must be greater than 0\n");
+					return 1;
 				  }
 				  user_param->test_type = DURATION;
-				  if (user_param->verb != SEND || user_param->tst != LAT) {
-					  fprintf(stderr," Duration measurement method only implemented in ib_send_lat\n");
-                      return 1;
-				  }
 				  break;
 			case 'f': user_param->margin = strtol(optarg, NULL, 0);
 				  if (user_param->margin <= 0) {
 					  fprintf(stderr," margin must be greater than 0\n");
-                      return 1;
-				  }
-				  if (user_param->verb != SEND || user_param->tst != LAT) {
-					  fprintf(stderr," Duration measurement method only implemented in ib_send_lat\n");
-                      return 1;
+                      			  return 1;
 				  }
 				  break;
 			case 'q': CHECK_VALUE(user_param->num_of_qps,MIN_QP_NUM,MAX_QP_NUM,"num of Qps"); 
 				if (user_param->verb != WRITE || user_param->tst != BW) {
 					fprintf(stderr," Multiple QPs only availible on ib_write_bw and ib_write_bw_postlist\n");
-                    return 1;
+                    			return 1;
 				} break;
 			case 'e': user_param->use_event = ON;
 				if (user_param->verb == WRITE) {
 					fprintf(stderr," Events feature not availible on WRITE verb\n");
-                    return 1;
-                } break;
+                    			return 1;
+                		} break;
 
-            case 'I': CHECK_VALUE(user_param->inline_size,MIN_INLINE,MAX_INLINE,"Inline size");
+            		case 'I': CHECK_VALUE(user_param->inline_size,MIN_INLINE,MAX_INLINE,"Inline size");
 				if (user_param->verb == READ) {
 					fprintf(stderr," Inline feature not availible on READ verb\n");
-                    return 1;
+                    			return 1;
 				} break;
 
-            case 'o': user_param->out_reads = strtol(optarg, NULL, 0);
+            		case 'o': user_param->out_reads = strtol(optarg, NULL, 0);
 				if (user_param->verb != READ) {
 					fprintf(stderr," Setting Outstanding reads only availible on READ verb\n");
-                    return 1;
-                } break;
+                    			return 1;
+                		} break;
             
-            case 'g': user_param->use_mcg = ON;
+            		case 'g': user_param->use_mcg = ON;
 				CHECK_VALUE(user_param->num_of_qps,MIN_QP_MCAST,MAX_QP_MCAST," Num of Mcast QP");
 				if (user_param->verb != SEND) {
 					fprintf(stderr," MultiCast feature only availible on SEND verb\n");
 					return 1;
-                } break;
+                		} break;
 
 			case 'M': GET_STRING(user_param->user_mgid,strdupa(optarg)); 
 			    if (user_param->verb != SEND) {
@@ -624,7 +632,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
                 }
 				user_param->r_flag->histogram = ON;	break;
 	
-            case 'U': 
+            		case 'U': 
 				if (user_param->tst != LAT) {
 					fprintf(stderr," Availible only on Latency tests\n");
 					return 1;

@@ -43,6 +43,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <malloc.h>
+#include <signal.h>
+#include <errno.h>
 
 #include "get_clock.h"
 #include "perftest_parameters.h"
@@ -53,7 +55,12 @@
 
 cycles_t	*tposted;
 cycles_t	*tcompleted;
-
+volatile cycles_t		start_traffic = 0;
+volatile cycles_t		end_traffic = 0;
+volatile cycles_t		start_sample = 0;
+volatile cycles_t		end_sample = 0;
+struct perftest_parameters user_param;
+int             global_cnt = 0;
 /****************************************************************************** 
  *
  ******************************************************************************/
@@ -155,25 +162,36 @@ static void print_report(struct perftest_parameters *user_param) {
 
 	opt_delta = tcompleted[opt_posted] - tposted[opt_completed];
 
-	if (user_param->noPeak == OFF) {
+	if (user_param->noPeak == OFF && user_param->test_type == ITERATIONS) {
 		/* Find the peak bandwidth unless asked not to in command line*/
 		for (i = 0; i < iters * user_param->num_of_qps; ++i)
-		  for (j = i; j < iters * user_param->num_of_qps; ++j) {
-		    t = (tcompleted[j] - tposted[i]) / (j - i + 1);
-		    if (t < opt_delta) {
-		      opt_delta  = t;
-		      opt_posted = i;
-		      opt_completed = j;
-		    }
-		  }
+			for (j = i; j < iters * user_param->num_of_qps; ++j) {
+		    		t = (tcompleted[j] - tposted[i]) / (j - i + 1);
+		    		if (t < opt_delta) {
+		      			opt_delta  = t;
+		      			opt_posted = i;
+		      			opt_completed = j;
+		    	}
+		}
 	}
 	
 	cycles_to_units = get_cpu_mhz(user_param->cpu_freq_f) * 1000000;
-
+	
+	global_cnt = user_param->duplex ? 2 * global_cnt : global_cnt;
 	tsize = user_param->duplex ? 2 : 1;
 	tsize = tsize * user_param->size;
-	printf(REPORT_FMT,(unsigned long)user_param->size, iters,!(user_param->noPeak) * tsize * cycles_to_units / opt_delta / 0x100000,
-	       tsize*iters*user_param->num_of_qps*cycles_to_units/(tcompleted[(iters*user_param->num_of_qps) - 1] - tposted[0]) / 0x100000);
+	if (user_param->test_type == ITERATIONS) {
+		printf(REPORT_FMT,(unsigned long)user_param->size, iters,!(user_param->noPeak) * tsize * cycles_to_units / opt_delta / 0x100000,
+	       		tsize*iters*user_param->num_of_qps*cycles_to_units/(tcompleted[(iters*user_param->num_of_qps) - 1] - tposted[0]) / 0x100000, 
+			( 1 + user_param->duplex) * iters*user_param->num_of_qps*cycles_to_units/(tcompleted[(iters*user_param->num_of_qps) - 1] - tposted[0])/1000000);
+	}else { 
+		printf(REPORT_FMT, (unsigned long) user_param->size,
+		global_cnt,
+		0.00,
+		tsize * global_cnt * cycles_to_units / (end_sample - start_sample) / 0x100000, 
+		global_cnt * cycles_to_units / (end_sample - start_sample)/1000000);
+		
+		}
 }
 
 /****************************************************************************** 
@@ -183,15 +201,16 @@ int run_iter(struct pingpong_context *ctx,
 			 struct perftest_parameters *user_param,
 			 struct pingpong_dest *rem_dest)	{
 
-    int                totscnt = 0;
-	int 			   totccnt = 0;
+	int                totscnt = 0;
+	int		   totccnt = 0;
 	int                i       = 0;
-    int                index,ne;
+	int                index,ne =0;
 	int				   warmindex;
-    struct ibv_send_wr *bad_wr;
-    struct ibv_wc 	   *wc       = NULL;
+	int rc;
+	struct ibv_send_wr *bad_wr;
+	struct ibv_wc 	   *wc       = NULL;
 	struct ibv_sge     *sge_list = NULL;
-    struct ibv_send_wr *wr       = NULL;
+	struct ibv_send_wr *wr       = NULL;
 	uint64_t		   *my_addr  = NULL;
 	uint64_t		   *rem_addr = NULL;
 
@@ -219,9 +238,9 @@ int run_iter(struct pingpong_context *ctx,
 		wr[index].wr_id               = index;
 		wr[index].send_flags          = IBV_SEND_SIGNALED;
 
-		if (user_param->size <= user_param->inline_size) 
+		if (user_param->size <= user_param->inline_size) {
 			wr[index].send_flags |= IBV_SEND_INLINE;
-
+		}
 		ctx->scnt[index] = 0;
 		ctx->ccnt[index] = 0;
 		my_addr[index]	 = sge_list[index].addr;
@@ -231,15 +250,16 @@ int run_iter(struct pingpong_context *ctx,
 	
 	for (warmindex = 0 ;warmindex < user_param->tx_depth ;warmindex ++ ) {
 	  for (index =0 ; index < user_param->num_of_qps ; index++) {
-
 			if (ctx->scnt[index] % user_param->cq_mod == 0 && user_param->cq_mod > 1)
 				wr[index].send_flags &= ~IBV_SEND_SIGNALED;
 
 			tposted[totscnt] = get_cycles();
-            if (ibv_post_send(ctx->qp[index],&wr[index],&bad_wr)) {
-                fprintf(stderr,"Couldn't post send: qp %d scnt=%d \n",index,ctx->scnt[index]);
-                return 1;
-            }
+			rc = ibv_post_send(ctx->qp[index],&wr[index],&bad_wr);
+			if (rc) {
+				printf("ibv_post_send err=%d, rc=%d\n", errno, rc);
+				fprintf(stderr,"Couldn't post send: qp %d scnt=%d errno=%s\n",index,ctx->scnt[index],strerror(errno));
+				return 1;
+			}
 			// If we can increase the remote address , so the next write will be to other address ,
 			// We do it.
 			if (user_param->size <= (CYCLE_BUFFER / 2)) { 
@@ -249,28 +269,34 @@ int run_iter(struct pingpong_context *ctx,
 
 
 			ctx->scnt[index]++;
-            totscnt++;
+			totscnt++;
 
-			if (ctx->scnt[index]%user_param->cq_mod == user_param->cq_mod - 1 || ctx->scnt[index] == user_param->iters - 1)
+			if (ctx->scnt[index]%user_param->cq_mod == user_param->cq_mod - 1 || (user_param->test_type == ITERATIONS &&  ctx->scnt[index] == user_param->iters - 1))
 				wr[index].send_flags |= IBV_SEND_SIGNALED;
 
-      }
+      	  }
 	}  
-
+	if (user_param->state != START_STATE) {
+		fprintf(stderr, "Failed - Margin is not long enough (taking samples before warmup ends), Please increase Margin or decreace tx_depth \n");
+		return 1;
+	}
 	// main loop for posting 
-	while (totscnt < (user_param->iters * user_param->num_of_qps)  || totccnt < (user_param->iters * user_param->num_of_qps) ) {
-
+	while (totscnt < (user_param->iters * user_param->num_of_qps)  || totccnt < (user_param->iters * user_param->num_of_qps) || (user_param->test_type == DURATION && user_param->state != END_STATE) ) {
+		
+		if (user_param->state == END_STATE) break;
 		// main loop to run over all the qps and post each time n messages 
 		for (index =0 ; index < user_param->num_of_qps ; index++) {
-          
-			while (ctx->scnt[index] < user_param->iters && (ctx->scnt[index] - ctx->ccnt[index]) < user_param->tx_depth) {
-
+          		if (user_param->state == END_STATE) break;
+			while ((ctx->scnt[index] < user_param->iters || user_param->test_type == DURATION) && (ctx->scnt[index] - ctx->ccnt[index]) < user_param->tx_depth) {
+				if (user_param->state == END_STATE) break;
 				if (ctx->scnt[index] % user_param->cq_mod == 0 && user_param->cq_mod > 1)
 					wr[index].send_flags &= ~IBV_SEND_SIGNALED;
 
-				tposted[totscnt] = get_cycles();
+				if (user_param->test_type == ITERATIONS) 
+					tposted[totscnt] = get_cycles();
+				
 				if (ibv_post_send(ctx->qp[index],&wr[index],&bad_wr)) {
-					fprintf(stderr,"Couldn't post send: qp %d scnt=%d \n",index,ctx->scnt[index]);
+					fprintf(stderr,"Couldn't post send: qp %d scnt=%d errno=%s\n",index,ctx->scnt[index],strerror(errno));
 					return 1;
 				}     
 				
@@ -282,15 +308,18 @@ int run_iter(struct pingpong_context *ctx,
 				ctx->scnt[index]++;
 				totscnt++;
 
-				if (ctx->scnt[index]%user_param->cq_mod == user_param->cq_mod - 1 || ctx->scnt[index] == user_param->iters - 1)
+				if (ctx->scnt[index]%user_param->cq_mod == user_param->cq_mod - 1 || (user_param->test_type == ITERATIONS && ctx->scnt[index] == user_param->iters - 1))
 					wr[index].send_flags |= IBV_SEND_SIGNALED;
 			}
 		}
 
 		// finished posting now polling 
-		if (totccnt < (user_param->iters * user_param->num_of_qps) ) {
-	    
+		if (totccnt < (user_param->iters * user_param->num_of_qps) || (user_param->test_type == DURATION &&  totccnt < totscnt) ) {
+	    		
+			if (user_param->state == END_STATE) break;
+				
 			do {
+				if (user_param->state == END_STATE) break;
 				ne = ibv_poll_cq(ctx->cq, DEF_WC_SIZE, wc);
 				if (ne > 0) {
 					for (i = 0; i < ne; i++) {
@@ -300,12 +329,14 @@ int run_iter(struct pingpong_context *ctx,
 
 						ctx->ccnt[(int)wc[i].wr_id] += user_param->cq_mod;
 						totccnt += user_param->cq_mod;
-
-						if (totccnt >= user_param->iters*user_param->num_of_qps - 1)
-							tcompleted[user_param->iters*user_param->num_of_qps - 1] = get_cycles();
-
-						else 
-							tcompleted[totccnt-1] = get_cycles();
+						if (user_param->test_type == ITERATIONS) {
+							if (totccnt >= user_param->iters*user_param->num_of_qps - 1)
+								tcompleted[user_param->iters*user_param->num_of_qps - 1] = get_cycles();
+							else 
+								tcompleted[totccnt-1] = get_cycles();
+						} else if (user_param->state == SAMPLE_STATE){
+							global_cnt += user_param->cq_mod;
+						}
 					}
 				}
 			} while (ne > 0);
@@ -316,6 +347,24 @@ int run_iter(struct pingpong_context *ctx,
 			}
 		}
 	}
+// 	int j,k;
+// 	k=0;
+// 	for (j=1 ; j<1000000 ; j++){
+// 		if (user_param->state == END_STATE){
+// 			do {
+// 				
+// 				ne = ibv_poll_cq(ctx->cq, DEF_WC_SIZE, wc);
+// 				if (ne > 0) {
+// 					for (i = 0; i < ne; i++) {
+// 						k+=ne;
+// 						if (wc[i].status != IBV_WC_SUCCESS) 
+// 							NOTIFY_COMP_ERROR_SEND(wc[i],totscnt,totccnt);
+// 					}
+// 				}
+// 			} while (ne > 0);
+// 		}
+// 	}
+// 	printf("k= %d", k);
 
 	free(wr);
 	free(sge_list);
@@ -330,18 +379,21 @@ int run_iter(struct pingpong_context *ctx,
  ******************************************************************************/
 int main(int argc, char *argv[]) {
 
-	int                         i = 0;
+	int                         	i = 0 ,j = 0;
+	int     			size_min_pow=1;
+	int                      	size_max_pow = 24;
 	struct ibv_device		    *ib_dev = NULL;
 	struct pingpong_context     ctx;
 	struct pingpong_dest        *my_dest,*rem_dest;
-	struct perftest_parameters  user_param;
 	struct perftest_comm		user_comm;
 
 	/* init default values to user's parameters */
 	memset(&user_param,0,sizeof(struct perftest_parameters));
 	memset(&user_comm,0,sizeof(struct perftest_comm));
 	memset(&ctx,0,sizeof(struct pingpong_context));
-	
+	memset(&my_dest, 0 , sizeof(struct pingpong_dest));
+	memset(&rem_dest, 0 , sizeof(struct pingpong_dest));
+
 	user_param.verb    = WRITE;
 	user_param.tst     = BW;
 	user_param.version = VERSION;
@@ -375,76 +427,100 @@ int main(int argc, char *argv[]) {
 	// Print basic test information.
 	ctx_print_test_info(&user_param);
 
-	ALLOCATE(my_dest , struct pingpong_dest , user_param.num_of_qps);
-	memset(my_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
-	ALLOCATE(rem_dest , struct pingpong_dest , user_param.num_of_qps);
-	memset(rem_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
+	j=size_min_pow;
+	if (user_param.connection_type == UD)  
+ 		size_max_pow =  (int)UD_MSG_2_EXP(MTU_SIZE(user_param.curr_mtu)) ;
+ 
+	do { 
+		if (user_param.all == ON) 
+ 			user_param.size = 1 << j;
 
-	// copy the rellevant user parameters to the comm struct + creating rdma_cm resources.
-	if (create_comm_struct(&user_comm,&user_param)) { 
-		fprintf(stderr," Unable to create RDMA_CM resources\n");
-		return 1;
-	}
 
-	// Create (if nessacery) the rdma_cm ids and channel.
-	if (user_param.work_rdma_cm == ON) {
+		ALLOCATE(my_dest , struct pingpong_dest , user_param.num_of_qps);
+		memset(my_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
+		ALLOCATE(rem_dest , struct pingpong_dest , user_param.num_of_qps);
+		memset(rem_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
+	
+		// copy the rellevant user parameters to the comm struct + creating rdma_cm resources.
+		if (create_comm_struct(&user_comm,&user_param)) { 
+			fprintf(stderr," Unable to create RDMA_CM resources\n");
+			return 1;
+		}
 
-	    if (create_rdma_resources(&ctx,&user_param)) {
-			fprintf(stderr," Unable to create the rdma_resources\n");
-			return FAILURE;
-	    }
-		
-  	    if (user_param.machine == CLIENT) {
+		// Create (if nessacery) the rdma_cm ids and channel.
+		if (user_param.work_rdma_cm == ON) {
 
-			if (rdma_client_connect(&ctx,&user_param)) {
-				fprintf(stderr,"Unable to perform rdma_client function\n");
+    			if (create_rdma_resources(&ctx,&user_param)) {
+				fprintf(stderr," Unable to create the rdma_resources\n");
 				return FAILURE;
+    			}
+		
+     			if (user_param.machine == CLIENT) {
+
+				if (rdma_client_connect(&ctx,&user_param)) {
+					fprintf(stderr,"Unable to perform rdma_client function\n");
+					return FAILURE;
+				}
+		
+			} else {
+
+				if (rdma_server_connect(&ctx,&user_param)) {
+					fprintf(stderr,"Unable to perform rdma_server function\n");
+					return FAILURE;
+				}
 			}
-		
+					
 		} else {
-
-			if (rdma_server_connect(&ctx,&user_param)) {
-				fprintf(stderr,"Unable to perform rdma_client function\n");
+    
+    			// create all the basic IB resources (data buffer, PD, MR, CQ and events channel)
+    			if (ctx_init(&ctx,&user_param)) {
+				fprintf(stderr, " Couldn't create IB resources\n");
 				return FAILURE;
+    			}
+		}
+
+		// Set up the Connection.
+		if (set_up_connection(&ctx,&user_param,my_dest)) {
+			fprintf(stderr," Unable to set up socket connection\n");
+			return FAILURE;
+		}
+
+		if (user_param.all == OFF || (user_param.all == ON && j == size_min_pow)){
+			// Print this machine QP information
+			for (i=0; i < user_param.num_of_qps; i++) 
+				ctx_print_pingpong_data(&my_dest[i],&user_comm);
+		}
+
+		if (user_param.all == OFF || (user_param.all == ON && j == size_min_pow) || user_param.machine == CLIENT || user_param.work_rdma_cm == ON) {
+			// Init the connection and print the local data.
+			if (establish_connection(&user_comm)) {
+				fprintf(stderr," Unable to init the socket connection\n");
+				return 1;
+			}
+		} else { //if not the first time, server is waiting for client
+			user_comm.rdma_params->sockfd = accept(user_comm.sockfd_sd, NULL, 0);
+			if (user_comm.rdma_params->sockfd < 0) {
+				fprintf(stderr, "accept() failed\n");
+				close(user_comm.sockfd_sd);
+				return 1;
 			}
 		}
-					
-	} else {
-    
-	    // create all the basic IB resources (data buffer, PD, MR, CQ and events channel)
-	    if (ctx_init(&ctx,&user_param)) {
-			fprintf(stderr, " Couldn't create IB resources\n");
-			return FAILURE;
-	    }
-	}
 
-	// Set up the Connection.
-	if (set_up_connection(&ctx,&user_param,my_dest)) {
-		fprintf(stderr," Unable to set up socket connection\n");
-		return FAILURE;
-	}
-
-	// Print this machine QP information
-	for (i=0; i < user_param.num_of_qps; i++) 
-		ctx_print_pingpong_data(&my_dest[i],&user_comm);
-
-	// Init the connection and print the local data.
-	if (establish_connection(&user_comm)) {
-		fprintf(stderr," Unable to init the socket connection\n");
-		return FAILURE;
-	}
-
-	// shaking hands and gather the other side info.
-	for (i=0; i < user_param.num_of_qps; i++) {
+		// shaking hands and gather the other side info.
+		for (i=0; i < user_param.num_of_qps; i++) {
 
 			if (ctx_hand_shake(&user_comm,&my_dest[i],&rem_dest[i])) {
 				fprintf(stderr," Failed to exchange date between server and clients\n");
 				return 1;   
 			}
 
-			// Print remote machine QP information
-			user_comm.rdma_params->side = REMOTE;
-			ctx_print_pingpong_data(&rem_dest[i],&user_comm);
+			if (user_param.all == OFF || (user_param.all == ON && j == size_min_pow)){
+				// Print remote machine QP information
+				user_comm.rdma_params->side = REMOTE;
+				ctx_print_pingpong_data(&rem_dest[i],&user_comm);
+				printf(RESULT_LINE);
+				printf(RESULT_FMT);
+			}
 
 			if (user_param.work_rdma_cm == OFF) {
 
@@ -459,52 +535,58 @@ int main(int argc, char *argv[]) {
 				fprintf(stderr," Failed to exchange date between server and clients\n");
 				return FAILURE; 
 			}
-	}	
+		}	
 
-	printf(RESULT_LINE);
-	printf(RESULT_FMT);
-
-	// For half duplex tests, server just waits for client to exit 
-	if (user_param.machine == SERVER && !user_param.duplex) {
+		// For half duplex tests, server just waits for client to exit 
+		if (user_param.machine == SERVER && !user_param.duplex) {
 		
-		if (ctx_close_connection(&user_comm,&my_dest[0],&rem_dest[0])) {
-			fprintf(stderr,"Failed to close connection between server and client\n");
-			return 1;
-		}
-		printf(RESULT_LINE);
-		return destroy_ctx(&ctx,&user_param);
-	}
+			if (ctx_close_connection(&user_comm,&my_dest[0],&rem_dest[0])) {
+				fprintf(stderr,"Failed to close connection between server and client\n");
+				return 1;
+			}
+			
+		}else {
 
-	ALLOCATE(tposted,cycles_t,user_param.iters*user_param.num_of_qps);
-	ALLOCATE(tcompleted,cycles_t,user_param.iters*user_param.num_of_qps);
+			ALLOCATE(tposted,cycles_t,user_param.iters*user_param.num_of_qps);
+			ALLOCATE(tcompleted,cycles_t,user_param.iters*user_param.num_of_qps);
 
-	if (user_param.all == ON) {
 
-		for (i = 1; i < 24 ; ++i) {
-			user_param.size = 1 << i;
+			if (user_param.test_type == DURATION) {
+				user_param.state = START_STATE;
+				signal(SIGALRM, catch_alarm);
+				alarm(user_param.margin);
+				global_cnt = 0;
+			}
+			start_traffic = get_cycles();
 			if(run_iter(&ctx,&user_param,rem_dest))
-				return 17;
+				return 18;
 			print_report(&user_param);
+
+			free(tposted);
+			free(tcompleted);
+
+			// Closing connection.
+			if (ctx_close_connection(&user_comm,&my_dest[0],&rem_dest[0])) {
+	 			fprintf(stderr,"Failed to close connection between server and client\n");
+				return 1;
+			}
 		}
+		free(my_dest);
+		free(rem_dest);
 
-	} else {
-
-		if(run_iter(&ctx,&user_param,rem_dest))
-			return 18;
-		print_report(&user_param);
-	}
-
-	free(tposted);
-	free(tcompleted);
-
-	// Closing connection.
-	if (ctx_close_connection(&user_comm,&my_dest[0],&rem_dest[0])) {
-	 	fprintf(stderr,"Failed to close connection between server and client\n");
-		return 1;
-	}
-
-	free(my_dest);
-	free(rem_dest);
+		if (destroy_ctx(&ctx, &user_param, NULL, 0)){
+			fprintf(stderr,"Failed to destroy_ctx\n");
+        		return 1;
+		}
+		if (user_param.use_rdma_cm) {
+			if (destroy_ctx(user_comm.rdma_ctx, user_comm.rdma_params , NULL, ((user_param.all == ON && i == size_max_pow) || user_param.all == OFF))){
+				fprintf(stderr,"Failed to destroy_ctx\n");
+        			return 1;
+			}
+		}
+		j++;
+	}while ((j >= size_min_pow) && (j <= size_max_pow) && (user_param.all == ON));
+	
 	printf(RESULT_LINE);
-	return destroy_ctx(&ctx,&user_param);
+	return 0;
 }

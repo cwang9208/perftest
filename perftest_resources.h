@@ -56,6 +56,8 @@
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 #include "perftest_parameters.h"
+#include "multicast_resources.h"
+
 #include <stdint.h>
 #include <math.h>
 #include <arpa/inet.h>
@@ -108,6 +110,13 @@
 // If message size is smaller then CACHE_LINE size then we write in CACHE_LINE jumps.
 #define INC(size) ((size > CACHE_LINE_SIZE) ? ((size%CACHE_LINE_SIZE == 0) ?  \
 	       (size) : (CACHE_LINE_SIZE*(size/CACHE_LINE_SIZE+1))) : (CACHE_LINE_SIZE))
+
+
+extern volatile cycles_t	start_traffic;
+extern volatile cycles_t	end_traffic;
+extern volatile cycles_t	start_sample;
+extern volatile cycles_t	end_sample;
+extern struct perftest_parameters user_param;
 
 
 enum state{
@@ -208,7 +217,7 @@ int create_rdma_resources(struct pingpong_context *ctx,
  * Return Value : SUCCESS, FAILURE.
  */
 int destroy_ctx(struct pingpong_context *ctx,
-				struct perftest_parameters *user_parm);
+				struct perftest_parameters *user_parm, struct mcast_parameters    *mcg_params, bool close_device);
 
 /* ctx_init
  *
@@ -369,4 +378,33 @@ void gen_eth_header(struct ETH_header* eth_header,uint8_t* src_mac,uint8_t* dst_
  *
  */
 void dump_buffer(unsigned char *bufptr, int len);
+
+/* destroy_mcast_group .
+ *
+ * Description :
+ *
+ *  destroy multicast group
+ *
+ * Parameters : 
+ *
+ *  ctx - pointer of the context.
+ *  user_parm - user parameters.
+ *  mcg_params - mulicast grop structure.
+ */
+int destroy_mcast_group(struct pingpong_context *ctx,
+							   struct perftest_parameters *user_parm,
+						       struct mcast_parameters *mcg_params);
+
+/* catch_alarm .
+ *
+ * Description :
+ *
+ *  set alarms and get clock times, 
+ *  work with O.S. signals. <signal.h>
+ *
+ * Parameters : 
+ *
+ *  sig - signal.
+ */
+void catch_alarm(int sig) ;
 #endif /* PERFTEST_RESOURCES_H */
