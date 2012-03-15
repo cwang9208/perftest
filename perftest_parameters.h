@@ -203,6 +203,8 @@ struct perftest_parameters {
 	int				cq_mod;
 	int 			spec;
 	int		 		tos;
+	uint32_t		rem_ud_qpn;
+	uint32_t		rem_ud_qkey;
 	uint8_t 		link_type;
     MachineType		machine;
     PrintDataSide	side;

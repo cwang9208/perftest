@@ -54,14 +54,14 @@ int create_rdma_resources(struct pingpong_context *ctx,
 
 	if (user_param->machine == CLIENT) {
 
-		if (rdma_create_id(ctx->cm_channel,&ctx->cm_id,NULL,RDMA_PS_TCP)) {
+		if (rdma_create_id(ctx->cm_channel,&ctx->cm_id,NULL,port_space)) {
 			fprintf(stderr,"rdma_create_id failed\n");
 			return FAILURE;
 		}
 
 	} else {
 
-		if (rdma_create_id(ctx->cm_channel,&ctx->cm_id_control,NULL,RDMA_PS_TCP)) {
+		if (rdma_create_id(ctx->cm_channel,&ctx->cm_id_control,NULL,port_space)) {
 			fprintf(stderr,"rdma_create_id failed\n");
 			return FAILURE;
 		}
