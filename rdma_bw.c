@@ -123,6 +123,7 @@ struct pp_data {
 	struct ibv_device		*ib_dev;
 	struct rdma_event_channel 	*cm_channel;
 	struct rdma_cm_id 		*cm_id;
+	uint8_t				rate_limit;
 
 };
 
@@ -198,6 +199,8 @@ retry_addr:
 				pid, __func__, event->event);
 			goto err1;
 		}
+		if (data->rate_limit)
+			rdma_set_max_rate(data->cm_id, data->rate_limit);
 		rdma_ack_cm_event(event);
 
         if (tos >= 0) {
@@ -921,6 +924,7 @@ static void usage(const char *argv0)
 	printf("  -m, --margin=<mar>     Margin of sampling time (when duration based run)\n");
 	printf("  -b, --bidirectional    measure bidirectional bandwidth (default unidirectional)\n");
 	printf("  -c, --cma		 		 use RDMA CM\n");
+	printf("  -r, --maxrate=<limit>	 		 set rate limit\n");
 }
 
 static void print_report(unsigned int iters, unsigned size, int duplex,
@@ -1018,7 +1022,8 @@ int main(int argc, char *argv[])
 		.rem_dest   = NULL,
 		.ib_dev     = NULL,
 		.cm_channel = NULL,
-		.cm_id      = NULL
+		.cm_id      = NULL,
+		.rate_limit	    = 0
 		
 	};
 
@@ -1039,10 +1044,11 @@ int main(int argc, char *argv[])
 			{ .name = "margin",         .has_arg = 1, .val = 'm' },
 			{ .name = "bidirectional",  .has_arg = 0, .val = 'b' },
 			{ .name = "cma", 	    .has_arg = 0, .val = 'c' },
+			{ .name = "maxrate",  	    .has_arg = 1, .val = 'r' },
 			{ 0 }
 		};
 
-		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:D:m:bc", long_options, NULL);
+		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:D:m:bcr:", long_options, NULL);
 		if (c == -1)
 			break;
 
@@ -1057,6 +1063,10 @@ int main(int argc, char *argv[])
 
 		case 'd':
 			ib_devname = strdupa(optarg);
+			break;
+
+		case 'r':
+			data.rate_limit = strtol(optarg, NULL, 0);
 			break;
 
 		case 'i':
