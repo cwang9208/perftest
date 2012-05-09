@@ -864,6 +864,8 @@ int main(int argc, char *argv[]) {
 
 		if (user_param.all == OFF || (user_param.all == ON && i == size_min_pow) || user_param.machine == CLIENT || user_param.work_rdma_cm == ON) {
 			// Init the connection and print the local data.
+			if (user_param.tos != DEF_TOS)
+				user_comm.rdma_params->tos = user_param.tos;
 			if (establish_connection(&user_comm)) {
 				fprintf(stderr," Unable to init the socket connection\n");
 				return 1;
