@@ -48,6 +48,7 @@ int create_rdma_resources(struct pingpong_context *ctx,
 	switch (user_param->connection_type) {
 
 		case RC: port_space = RDMA_PS_TCP; break;
+	        case RawEth:
 		case UD: port_space = RDMA_PS_UDP; break;
 		default: port_space = RDMA_PS_TCP;
 	}
