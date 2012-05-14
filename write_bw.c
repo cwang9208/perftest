@@ -391,8 +391,6 @@ int main(int argc, char *argv[]) {
 	memset(&user_param,0,sizeof(struct perftest_parameters));
 	memset(&user_comm,0,sizeof(struct perftest_comm));
 	memset(&ctx,0,sizeof(struct pingpong_context));
-	memset(&my_dest, 0 , sizeof(struct pingpong_dest));
-	memset(&rem_dest, 0 , sizeof(struct pingpong_dest));
 
 	user_param.verb    = WRITE;
 	user_param.tst     = BW;
