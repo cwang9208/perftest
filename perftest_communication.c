@@ -628,6 +628,11 @@ int rdma_client_connect(struct pingpong_context *ctx,
 		}	
 	}
 
+	if (user_param->verb == READ) {
+		conn_param.responder_resources = 1;
+		conn_param.initiator_depth = 1;
+	}
+
 	if (rdma_connect(ctx->cm_id,&conn_param)) {
 		fprintf(stderr, "Function rdma_connect failed\n");
 		return FAILURE;
@@ -748,6 +753,11 @@ int rdma_server_connect(struct pingpong_context *ctx,
 				return 1;
 			}
 		}
+	}
+
+	if (user_param->verb == READ) {
+		conn_param.responder_resources = 1;
+		conn_param.initiator_depth = 1;
 	}
 
 	if (rdma_accept(ctx->cm_id, &conn_param)) {
