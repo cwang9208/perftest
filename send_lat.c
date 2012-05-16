@@ -52,8 +52,7 @@
 #include "perftest_resources.h"
 #include "multicast_resources.h"
 #include "perftest_communication.h"
-
-#define VERSION 2.3
+#include "version.h"
 
 volatile cycles_t	start_traffic = 0;
 volatile cycles_t	end_traffic = 0;

@@ -50,8 +50,7 @@
 #include "perftest_parameters.h"
 #include "perftest_resources.h"
 #include "perftest_communication.h"
-
-#define VERSION 2.5
+#include "version.h"
 
 cycles_t	*tposted;
 cycles_t	*tcompleted;

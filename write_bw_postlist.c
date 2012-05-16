@@ -48,8 +48,8 @@
 #include "perftest_parameters.h"
 #include "perftest_resources.h"
 #include "perftest_communication.h"
+#include "version.h"
 
-#define VERSION 2.3
 #define ALL 1
 
 cycles_t	*tposted;

@@ -50,8 +50,8 @@
 #include "perftest_resources.h"
 #include "perftest_parameters.h"
 #include "perftest_communication.h"
+#include "version.h"
 
-#define VERSION 2.3
 volatile cycles_t	start_traffic = 0;
 volatile cycles_t	end_traffic = 0;
 volatile cycles_t	start_sample = 0;

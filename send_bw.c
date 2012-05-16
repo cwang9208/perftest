@@ -52,8 +52,7 @@
 #include "perftest_resources.h"
 #include "multicast_resources.h"
 #include "perftest_communication.h"
-
-#define VERSION 2.3
+#include "version.h"
 
 cycles_t	*tposted;
 cycles_t	*tcompleted;

@@ -547,7 +547,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc) {
 			case 'c': change_conn_type(&user_param->connection_type,optarg); 				  break;
 			case 'z': user_param->use_rdma_cm = ON; 										  break;
 			case 'R': user_param->work_rdma_cm = ON; 										  break;
-			case 'V': printf("Version: %.2f\n",user_param->version); 						  return 1;
+			case 'V': printf("Version: %.2f\n",user_param->version); 						  exit(0);
 			case 'h': usage(argv[0],user_param->verb,user_param->tst); 						  return 1;
 			case 'T': CHECK_VALUE(user_param->tos,MIN_TOS,MAX_TOS,"TOS");						  break;
 			case 'j': user_param->calc_first_byte_latency = ON;							  break;
