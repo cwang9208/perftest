@@ -73,6 +73,7 @@ volatile cycles_t		start_traffic = 0;
 volatile cycles_t		end_traffic = 0;
 volatile cycles_t		start_sample = 0;
 volatile cycles_t		end_sample = 0;
+static int check_mw = 0;
 
 enum state{
 	START_STATE,
@@ -99,12 +100,13 @@ struct pingpong_context {
 	struct ibv_context *context;
 	struct ibv_pd      *pd;
 	struct ibv_mr      *mr;
+	struct ibv_mw	   *mw;
 	struct ibv_cq      *rcq;
 	struct ibv_cq      *scq;
 	struct ibv_qp      *qp;
 	void               *buf;
-	volatile char      *post_buf;
-	volatile char      *poll_buf;
+	volatile void      *post_buf;
+	volatile void      *poll_buf;
 	int                 size;
 	int                 tx_depth;
 	struct 		    ibv_sge list;
@@ -217,6 +219,50 @@ static int pp_read_keys(int sockfd, const struct pingpong_dest *my_dest,
 	}
 
 	return 0;
+}
+
+
+static int pp_bind_mw(struct ibv_qp *qp, struct ibv_mr *mr,
+		      char *buf, int size, uint32_t new_rkey, struct ibv_mw *mw)
+{
+	int ret = 0;
+	struct ibv_send_wr bind_wr = { 0 };
+	struct ibv_send_wr *bad_bind_wr = NULL;
+
+	bind_wr.opcode = IBV_WR_BIND_MW;
+	bind_wr.next = NULL;
+	bind_wr.wr.bind_mw.mw = mw;
+	bind_wr.wr.bind_mw.rkey = new_rkey;
+	bind_wr.wr.bind_mw.bind_info.addr = (uint64_t) buf;
+	bind_wr.wr.bind_mw.bind_info.length = size * 2;
+	bind_wr.wr.bind_mw.bind_info.mr = mr;
+	bind_wr.wr.bind_mw.bind_info.mw_access_flags =
+		IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE |
+		IBV_ACCESS_REMOTE_ATOMIC;
+
+	ret = ibv_post_send(qp, &bind_wr, &bad_bind_wr);
+
+	mw->rkey = bind_wr.wr.bind_mw.rkey;
+	return ret;
+}
+
+static int pp_invalidate_mw(struct ibv_mw *mw, struct ibv_qp *qp)
+{
+	struct ibv_send_wr inv_wr = { 0 };
+	struct ibv_send_wr *bad_inv_wr = NULL;
+
+	inv_wr.opcode = IBV_WR_LOCAL_INV;
+	inv_wr.next = NULL;
+	inv_wr.imm_data = mw->rkey;
+
+	return ibv_post_send(qp, &inv_wr, &bad_inv_wr);
+}
+
+static int pp_rebind_mw(struct ibv_qp *qp, struct ibv_mr *mr,
+			char *buf, int size, struct ibv_mw *mw)
+{
+	pp_invalidate_mw(mw, qp);
+	return pp_bind_mw(qp, mr, buf, size, ibv_inc_rkey(mw->rkey), mw);
 }
 
 static struct pingpong_context *pp_client_connect(struct pp_data *data)
@@ -570,6 +616,7 @@ static struct pingpong_context *pp_init_ctx(void *ptr, struct pp_data *data)
 	struct pingpong_context *ctx;
 	struct ibv_device *ib_dev;
 	struct rdma_cm_id *cm_id = NULL;
+	int mr_additional_access;
 
 	ctx = malloc(sizeof *ctx);
 	if (!ctx)
@@ -587,9 +634,13 @@ static struct pingpong_context *pp_init_ctx(void *ptr, struct pp_data *data)
 
 	memset(ctx->buf, 0, ctx->size * 2);
 
-	ctx->post_buf = (char *)ctx->buf + (ctx->size -1);
-	ctx->poll_buf = (char *)ctx->buf + (2 * ctx->size -1);
-	
+	if (check_mw) {
+		ctx->post_buf = (uint32_t *)ctx->buf;
+		ctx->poll_buf = (uint32_t *)(ctx->buf + ctx->size);
+	} else {
+		ctx->post_buf = (char *)ctx->buf + (ctx->size - 1);
+		ctx->poll_buf = (char *)ctx->buf + (2 * ctx->size - 1);
+	}
 
 	if (data->use_cma) {
 		cm_id = (struct rdma_cm_id *)ptr;
@@ -619,11 +670,24 @@ static struct pingpong_context *pp_init_ctx(void *ptr, struct pp_data *data)
         /* We dont really want IBV_ACCESS_LOCAL_WRITE, but IB spec says:
          * The Consumer is not allowed to assign Remote Write or Remote Atomic to
          * a Memory Region that has not been assigned Local Write. */
+	mr_additional_access = check_mw ? IBV_ACCESS_MW_BIND : 0;
+
 	ctx->mr = ibv_reg_mr(ctx->pd, ctx->buf, ctx->size * 2,
-			     IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE);
+			     IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE |
+			     mr_additional_access);
 	if (!ctx->mr) {
 		fprintf(stderr, "%d:%s: Couldn't allocate MR\n", pid, __func__);
 		return NULL;
+	}
+
+	ctx->mw = NULL;
+	if (check_mw) {
+		ctx->mw = ibv_alloc_mw(ctx->pd, IBV_MW_TYPE_2);
+		if (!ctx->mw) {
+			fprintf(stderr, "%d:%s: Couldn't allocate MW\n",
+				pid, __func__);
+			return NULL;
+		}
 	}
 
 	ctx->rcq = ibv_create_cq(ctx->context, 1, NULL, NULL, 0);
@@ -977,6 +1041,7 @@ static void usage(const char *argv0)
 	printf("  -H, --report-histogram print out all results (default print summary only)\n");
 	printf("  -U, --report-unsorted  (implies -H) print out unsorted results (default sorted)\n");
 	printf("  -c, --cma              Use the RDMA CMA to setup the RDMA connection\n");
+	printf("  -w, --memory_window    Use memory window - rebind each iteration\n");
 }
 
 /*
@@ -1102,11 +1167,10 @@ int main(int argc, char *argv[])
 
 	struct ibv_qp           *qp;
 	struct ibv_send_wr      *wr;
-	volatile char           *poll_buf;
-	volatile char           *post_buf;
+	volatile void           *poll_buf;
+	volatile void           *post_buf;
 
-	int                      scnt, rcnt, ccnt;
-
+	int                      scnt, rcnt, ccnt, ret;
 	cycles_t                *tstamp;
 
 	struct pp_data	 	 data = {
@@ -1142,10 +1206,11 @@ int main(int argc, char *argv[])
 			{ .name = "report-histogram",.has_arg = 0, .val = 'H' },
 			{ .name = "report-unsorted",.has_arg = 0, .val = 'U' },
 			{ .name = "cma", 	    .has_arg = 0, .val = 'c' },
+			{ .name = "memory_window", .has_arg = 0, .val = 'w' },
 			{ 0 }
 		};
 
-		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:D:m:I:CHUc", long_options, NULL);
+		c = getopt_long(argc, argv, "p:d:i:s:n:t:S:T:D:m:I:CHUcw", long_options, NULL);
 		if (c == -1)
 			break;
 
@@ -1234,6 +1299,11 @@ int main(int argc, char *argv[])
 				data.use_cma = 1;
 				break;
 
+			case 'w':
+				check_mw = 1;
+				data.size = sizeof(uint32_t);
+				break;
+
 			default:
 				usage(argv[0]);
 				return 7;
@@ -1317,6 +1387,7 @@ int main(int argc, char *argv[])
 		if (pp_open_port(ctx, &data))
 			return 9;
 	}
+
 	wr = &ctx->wr;
 	ctx->list.addr = (uintptr_t) ctx->buf;
 	ctx->list.length = ctx->size;
@@ -1351,6 +1422,11 @@ int main(int argc, char *argv[])
 		signal(SIGALRM, catch_alarm);
 		alarm(margin);
 	}
+
+	if (check_mw)
+		pp_bind_mw(ctx->qp, ctx->mr, ctx->buf, ctx->size,
+			   ibv_inc_rkey(ctx->mw->rkey), ctx->mw);
+
 	start_traffic = get_cycles();
 	/* Done with setup. Start the test. */
 
@@ -1359,7 +1435,12 @@ int main(int argc, char *argv[])
 		/* Wait till buffer changes. */
 		if ((rcnt < iters || (testing_type == DURATION && state != END_STATE)) && !(scnt < 1 && data.servername)) {
 			++rcnt;
-			while (*poll_buf != (char)rcnt && state != END_STATE);
+			if (check_mw) {
+				while (*(volatile uint32_t *)poll_buf == 0 && state != END_STATE);
+				wr->wr.rdma.rkey = ntohl(*(volatile uint32_t *)poll_buf);
+				*(volatile uint32_t *)poll_buf = 0;
+			} else
+				while (*(volatile char *)poll_buf != (char)rcnt && state != END_STATE);
 			/* Here the data is already in the physical memory.
 			   If we wanted to actually use it, we may need
 			   a read memory barrier here. */
@@ -1373,8 +1454,18 @@ int main(int argc, char *argv[])
 			if (testing_type == DURATION) {
 				tstamp[scnt % iters] = get_cycles();
 			}
+			++scnt;
+			if (check_mw) {
+				ret = pp_rebind_mw(ctx->qp, ctx->mr,
+						   ctx->buf, ctx->size, ctx->mw);
+				if (ret)
+					fprintf(stderr, "Failed rebind: ret=%d\n",
+						ret);
 
-			*post_buf = (char)++scnt;
+				*(volatile uint32_t *)post_buf = htonl(ctx->mw->rkey);
+			} else
+				*(volatile char *)post_buf = (char)scnt;
+
 			if (ibv_post_send(qp, wr, &bad_wr)) {
 				fprintf(stderr, "Couldn't post send: scnt=%d\n",
 					scnt);
