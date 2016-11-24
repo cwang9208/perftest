@@ -2598,7 +2598,7 @@ void print_report_lat (struct perftest_parameters *user_param)
 	double latency, stdev, average_sum = 0 , average, stdev_sum = 0;
 	int iters_99,iters_99_9;
 
-	rtt_factor = (user_param->verb == READ || user_param->verb == ATOMIC) ? 1 : 2;
+	rtt_factor = (user_param->verb == READ || user_param->verb == ATOMIC) ? 1 : 2; // report half of that as one-way latency
 	ALLOCATE(delta,cycles_t,user_param->iters - 1);
 
 	if (user_param->r_flag->cycles) {
