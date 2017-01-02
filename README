@@ -42,3 +42,8 @@ Client:		./<test name> <options> <server IP address>
 
   *** IMPORTANT NOTE:
       The SAME OPTIONS must be passed to both server and client.
+
+Common Options to all tests:
+----------------------------
+  -s, --size=<size>			Size of message to exchange (default: 1)
+  -a, --all				Run sizes from 2 till 2^23
