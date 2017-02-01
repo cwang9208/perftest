@@ -54,8 +54,8 @@ Common Options to all tests:
 SEND tests (ib_send_lat or ib_send_bw) flags: 
 ---------------------------------------------
 
-  -g, --mcg=<num_of_qps>    Send messages to multicast group with <num_of_qps> qps attached to it
-  -M, --MGID=<multicast_gid>    In multicast, uses <multicast_gid> as the group MGID
+  -g, --mcg=<num_of_qps>  	Send messages to multicast group with <num_of_qps> qps attached to it
+  -M, --MGID=<multicast_gid>		In multicast, uses <multicast_gid> as the group MGID
 
 ----------------------------------------------
 Special feature detailed explanation in tests:
