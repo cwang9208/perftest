@@ -48,14 +48,14 @@ Common Options to all tests:
 ----------------------------
   -s, --size=<size>			Size of message to exchange (default: 1)
   -a, --all				Run sizes from 2 till 2^23
-
-      --ipv6  Use IPv6 GID. Default is IPv4
+  
+  --ipv6  Use IPv6 GID. Default is IPv4
 
 SEND tests (ib_send_lat or ib_send_bw) flags: 
 ---------------------------------------------
 
-  -g, --mcg=<num_of_qps>    Send messages to multicast group with <num_of_qps> qps attached to it
-  -M, --MGID=<multicast_gid>    In multicast, uses <multicast_gid> as the group MGID
+  -g, --mcg=<num_of_qps>                Send messages to multicast group with <num_of_qps> qps attached to it
+  -M, --MGID=<multicast_gid>            In multicast, uses <multicast_gid> as the group MGID
 
 ----------------------------------------------
 Special feature detailed explanation in tests:
